@@ -38,7 +38,7 @@ dependencies = [
     "python-dateutil==2.9.0.post0",
     "orjson==3.11.9",
     "litellm==1.96.2",
-    "tzdata==2026.3",
+    "tzdata==2026.4",
     "pywebpush==2.5.0",
 
     # ML — anomaly detection
