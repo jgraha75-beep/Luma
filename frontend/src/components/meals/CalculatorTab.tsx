@@ -4,7 +4,7 @@ import { RotateCcw, Heart, Check } from 'lucide-react'
 import { api } from '../../lib/api'
 import { IngredientBuilder } from '../log-sheet/IngredientBuilder'
 import type { DraftItem, Favorite } from '../log-sheet/types'
-import { scaleByRatio, sumNutrients as sumNutrientList } from '../../lib/nutrients'
+import { scaleByRatio, scaleServingNutrients, sumNutrients as sumNutrientList } from '../../lib/nutrients'
 
 type NutrientTotals = DraftItem['nutrients']
 
@@ -330,6 +330,11 @@ export function CalculatorTab() {
           brand: item.brand ?? null,
           quantity_g: item.estimated_weight_g,
           nutrients: item.nutrients,
+          nutrition_basis: item.nutrition_basis ?? 'per_100g',
+          serving_count: item.nutrition_basis === 'per_serving' ? (item.serving_count ?? item.quantity) : null,
+          nutrients_per_serving: item.nutrition_basis === 'per_serving' ? (item.nutrients_per_serving ?? null) : null,
+          nutrient_source: item.nutrient_source ?? null,
+          source_id: item.source_id ?? item.food_id ?? null,
         })),
       }),
     onSuccess: () => {
@@ -345,6 +350,16 @@ export function CalculatorTab() {
     setItems((prev) => {
       const updated = [...prev]
       const item = { ...updated[index] }
+      if (item.nutrition_basis === 'per_serving') {
+        const servings = Math.max(0.25, newWeight)
+        const previousServings = Math.max(item.serving_count ?? item.quantity ?? 1, 0.25)
+        const baseNutrients = item.nutrients_per_serving ?? scaleByRatio(item.nutrients, 1 / previousServings)
+        item.serving_count = servings
+        item.quantity = servings
+        item.nutrients = scaleServingNutrients(baseNutrients, servings)
+        updated[index] = item
+        return updated
+      }
       const ratio = newWeight / item.estimated_weight_g
       item.estimated_weight_g = newWeight
       item.nutrients = scaleByRatio(item.nutrients, ratio)

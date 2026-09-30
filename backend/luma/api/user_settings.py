@@ -10,7 +10,15 @@ from luma.config import settings
 from luma.db.models import Preference, User
 from luma.deps import CurrentUser, DbDep
 from luma.services.hae_metrics import tracker as hae_metrics_tracker
+from luma.services.llm_client import get_role_route_status
 from luma.services.llm_metrics import tracker as llm_metrics_tracker
+from luma.services.nutrition_focus import (
+    NUTRITION_FOCUS_KIND,
+    NutritionFocus,
+    catalog as nutrition_focus_catalog,
+    focus_from_preference,
+    preference_value as nutrition_focus_preference_value,
+)
 
 router = APIRouter()
 
@@ -55,6 +63,64 @@ async def put_measurement_settings(
     db.add(Preference(user_id=user.id, kind=MEASUREMENT_PREF_KIND, value=body.system))
     await db.commit()
     return MeasurementSettingsOut(system=body.system)
+
+
+class NutritionFocusResponse(BaseModel):
+    preset: Literal["ldl_support", "performance", "comprehensive", "custom"]
+    metrics: list[str]
+    presets: list[dict[str, str]]
+    available_metrics: list[dict[str, str]]
+
+
+def _nutrition_focus_response(focus: NutritionFocus) -> NutritionFocusResponse:
+    options = nutrition_focus_catalog()
+    return NutritionFocusResponse(
+        preset=focus.preset,
+        metrics=focus.metrics,
+        presets=options["presets"],
+        available_metrics=options["metrics"],
+    )
+
+
+@router.get("/settings/nutrition-focus", response_model=NutritionFocusResponse)
+async def get_nutrition_focus(user: CurrentUser, db: DbDep) -> NutritionFocusResponse:
+    result = await db.execute(
+        select(Preference.value).where(
+            Preference.user_id == user.id,
+            Preference.kind == NUTRITION_FOCUS_KIND,
+        )
+    )
+    return _nutrition_focus_response(focus_from_preference(result.scalar_one_or_none()))
+
+
+@router.put("/settings/nutrition-focus", response_model=NutritionFocusResponse)
+async def put_nutrition_focus(
+    body: NutritionFocus,
+    user: CurrentUser,
+    db: DbDep,
+) -> NutritionFocusResponse:
+    await db.execute(
+        delete(Preference).where(
+            Preference.user_id == user.id,
+            Preference.kind == NUTRITION_FOCUS_KIND,
+        )
+    )
+    db.add(Preference(
+        user_id=user.id,
+        kind=NUTRITION_FOCUS_KIND,
+        value=nutrition_focus_preference_value(body),
+    ))
+    await db.commit()
+    # Coach context is cached for two hours. Refresh the lightweight snapshot
+    # now so the next coaching message honors this preference immediately.
+    try:
+        from luma.services.coach_context import refresh_coach_context
+        await refresh_coach_context(str(user.id), db)
+    except Exception:
+        # Persistence already succeeded; the scheduled refresh remains a safe
+        # fallback if the context table is unavailable.
+        pass
+    return _nutrition_focus_response(body)
 
 
 LLM_PRICING_PREF_KIND = "llm_pricing_override"
@@ -107,32 +173,21 @@ async def get_llm_metrics(user: CurrentUser) -> dict[str, Any]:
 
 @router.get("/settings/ai-config")
 async def get_ai_config(user: CurrentUser) -> dict[str, Any]:
+    def route(primary: str, fallback: str) -> dict[str, Any]:
+        return {
+            "primary": primary,
+            "fallback": fallback or None,
+            **get_role_route_status(primary, fallback),
+        }
+
     return {
         "models": {
-            "meal_planner": {
-                "primary": settings.meal_planner_model,
-                "fallback": settings.meal_planner_fallback_model or None,
-            },
-            "coach_agent": {
-                "primary": settings.coach_model,
-                "fallback": settings.coach_fallback_model or None,
-            },
-            "food_extractor": {
-                "primary": settings.food_extractor_model,
-                "fallback": settings.food_extractor_fallback_model or None,
-            },
-            "vision_classifier": {
-                "primary": settings.vision_classifier_model,
-                "fallback": settings.vision_classifier_fallback_model or None,
-            },
-            "insight_narrator": {
-                "primary": settings.insight_narrator_model,
-                "fallback": settings.insight_narrator_fallback_model or None,
-            },
-            "recipe_importer": {
-                "primary": settings.recipe_import_model,
-                "fallback": settings.recipe_import_fallback_model or None,
-            },
+            "meal_planner": route(settings.meal_planner_model, settings.meal_planner_fallback_model),
+            "coach_agent": route(settings.coach_model, settings.coach_fallback_model),
+            "food_extractor": route(settings.food_extractor_model, settings.food_extractor_fallback_model),
+            "vision_classifier": route(settings.vision_classifier_model, settings.vision_classifier_fallback_model),
+            "insight_narrator": route(settings.insight_narrator_model, settings.insight_narrator_fallback_model),
+            "recipe_importer": route(settings.recipe_import_model, settings.recipe_import_fallback_model),
         },
         "endpoints": {
             "local_ai_api_base": settings.local_ai_api_base or None,
@@ -167,43 +222,36 @@ async def get_ai_providers(user: CurrentUser) -> dict[str, Any]:
     Exposes which AI provider handles each feature without leaking model names,
     fallback routing, or system endpoint URLs.
     """
+    def feature(
+        *,
+        role: str,
+        label: str,
+        triggers: list[str],
+        primary: str,
+        fallback: str,
+    ) -> dict[str, Any]:
+        route = get_role_route_status(primary, fallback)
+        provider = (
+            _classify_provider(route["active"])
+            if route["active"]
+            else {"provider": "unconfigured", "provider_label": "Not configured", "is_cloud": False}
+        )
+        return {
+            "role": role,
+            "label": label,
+            "triggers": triggers,
+            "ready": route["ready"],
+            "issue": route["issue"],
+            **provider,
+        }
+
     features = [
-        {
-            "role": "coach_agent",
-            "label": "Coach",
-            "triggers": ["coach_tool_call"],
-            **_classify_provider(settings.coach_model),
-        },
-        {
-            "role": "food_extractor",
-            "label": "Food text recognition",
-            "triggers": ["food_extract"],
-            **_classify_provider(settings.food_extractor_model),
-        },
-        {
-            "role": "vision_classifier",
-            "label": "Food photo scanning",
-            "triggers": ["photo_log"],
-            **_classify_provider(settings.vision_classifier_model),
-        },
-        {
-            "role": "meal_planner",
-            "label": "Meal planning",
-            "triggers": ["meal_plan", "meal_alternatives"],
-            **_classify_provider(settings.meal_planner_model),
-        },
-        {
-            "role": "insight_narrator",
-            "label": "Health insights",
-            "triggers": ["insight_narrate"],
-            **_classify_provider(settings.insight_narrator_model),
-        },
-        {
-            "role": "recipe_importer",
-            "label": "Recipe import",
-            "triggers": ["recipe_import"],
-            **_classify_provider(settings.recipe_import_model),
-        },
+        feature(role="coach_agent", label="Coach", triggers=["coach_tool_call"], primary=settings.coach_model, fallback=settings.coach_fallback_model),
+        feature(role="food_extractor", label="Food text recognition", triggers=["food_extract"], primary=settings.food_extractor_model, fallback=settings.food_extractor_fallback_model),
+        feature(role="vision_classifier", label="Food photo scanning", triggers=["photo_log"], primary=settings.vision_classifier_model, fallback=settings.vision_classifier_fallback_model),
+        feature(role="meal_planner", label="Meal planning", triggers=["meal_plan", "meal_alternatives"], primary=settings.meal_planner_model, fallback=settings.meal_planner_fallback_model),
+        feature(role="insight_narrator", label="Health insights", triggers=["insight_narrate"], primary=settings.insight_narrator_model, fallback=settings.insight_narrator_fallback_model),
+        feature(role="recipe_importer", label="Recipe import", triggers=["recipe_import"], primary=settings.recipe_import_model, fallback=settings.recipe_import_fallback_model),
     ]
     return {"features": features}
 

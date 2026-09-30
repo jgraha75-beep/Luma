@@ -15,6 +15,11 @@ from luma.services.today_metrics import (
     compute_streak,
     fetch_biometrics_latest,
 )
+from luma.services.nutrition_focus import (
+    NUTRITION_FOCUS_KIND,
+    catalog as nutrition_focus_catalog,
+    focus_from_preference,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -33,10 +38,18 @@ async def get_today(
     today_dt = datetime.now(resolved_tz).date()
 
     # 1. Fetch user's goals
-    from luma.db.models import Goal, MealEvent, MealPlan, MealPlanSlot
+    from luma.db.models import Goal, MealEvent, MealPlan, MealPlanSlot, Preference
     stmt_goal = select(Goal).where(Goal.user_id == user.id)
     res_goal = await db.execute(stmt_goal)
     goal = res_goal.scalar_one_or_none()
+
+    focus_row = await db.execute(
+        select(Preference.value).where(
+            Preference.user_id == user.id,
+            Preference.kind == NUTRITION_FOCUS_KIND,
+        )
+    )
+    nutrition_focus = focus_from_preference(focus_row.scalar_one_or_none())
 
     target_cal = goal.daily_calorie_target if goal else None
     target_sat = float(goal.daily_sat_fat_g_max) if goal and goal.daily_sat_fat_g_max else None
@@ -76,6 +89,25 @@ async def get_today(
     sol_pct = round((logged_sol / target_sol) * 100, 1) if target_sol else None
     sodium_pct = round((logged_sodium / target_sodium) * 100, 1) if target_sodium else None
     protein_pct = round((logged_protein / target_protein) * 100, 1) if target_protein else None
+
+    target_by_metric: dict[str, float | None] = {
+        "calories": float(target_cal) if target_cal is not None else None,
+        "saturated_fat_g": target_sat,
+        "soluble_fiber_g": target_sol,
+        "sodium_mg": target_sodium,
+        "protein_g": target_protein,
+    }
+    focus_metrics = {}
+    focus_catalog = nutrition_focus_catalog()["metrics"]
+    for metric in focus_catalog:
+        metric_id = metric["id"]
+        value = float(logged.get(metric_id, 0.0))
+        target = target_by_metric.get(metric_id)
+        focus_metrics[metric_id] = {
+            "logged": value,
+            "target": target,
+            "pct": round((value / target) * 100, 1) if target else None,
+        }
     
     # 3. Fetch today's meal plan slots
     stmt_plan = (
@@ -132,6 +164,12 @@ async def get_today(
             "sodium_mg":        {"logged": logged_sodium,  "target": target_sodium,  "pct": sodium_pct},
             "protein_g":        {"logged": logged_protein, "target": target_protein, "pct": protein_pct},
         },
+        "nutrition_focus": {
+            "preset": nutrition_focus.preset,
+            "metrics": nutrition_focus.metrics,
+            "available_metrics": focus_catalog,
+        },
+        "nutrition_adherence": focus_metrics,
         "biometrics_latest": {
             "hrv_ms":              latest.get("hrv_ms"),
             "rhr_bpm":             latest.get("rhr_bpm"),

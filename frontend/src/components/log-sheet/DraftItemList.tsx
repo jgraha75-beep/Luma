@@ -53,6 +53,8 @@ function sourceBadge(item: DraftItem): { label: string; color: string; bg: strin
       return { label: 'USDA', color: 'var(--sky-300)', bg: 'rgba(56,189,248,0.12)', border: 'rgba(56,189,248,0.28)' }
     case 'off':
       return { label: 'Label', color: 'var(--fg-tertiary)', bg: 'rgba(255,255,255,0.06)', border: 'rgba(255,255,255,0.1)' }
+    case 'tabecal':
+      return { label: 'Japan menu', color: 'var(--sky-300)', bg: 'rgba(56,189,248,0.12)', border: 'rgba(56,189,248,0.28)' }
     case 'user':
       return { label: 'Your food', color: '#c084fc', bg: 'rgba(167,139,250,0.12)', border: 'rgba(167,139,250,0.25)' }
     default:
@@ -89,8 +91,9 @@ export function DraftItemList({ draftItems, onRemoveItem, onUpdateWeight, onUpda
       <div className="eyebrow" style={{ marginBottom: 8 }}>Meal items ({draftItems.length})</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {draftItems.map((item, idx) => {
-          const base = item.base_weight_g ?? item.estimated_weight_g
-          const current = Math.round(item.estimated_weight_g)
+          const isServingBased = item.nutrition_basis === 'per_serving'
+          const base = isServingBased ? (item.serving_count ?? item.quantity ?? 1) : (item.base_weight_g ?? item.estimated_weight_g)
+          const current = isServingBased ? (item.serving_count ?? item.quantity ?? 1) : Math.round(item.estimated_weight_g)
           const perServingG = showPerServing ? item.estimated_weight_g / (servings as number) : 0
           return (
             <div key={idx} className="builder-ingredient-card">
@@ -174,13 +177,15 @@ export function DraftItemList({ draftItems, onRemoveItem, onUpdateWeight, onUpda
                 </div>
               </div>
 
-              {/* Portion: editable grams + relative multiplier chips */}
+              {/* Portion: serving count for menu items, grams + relative multiplier chips otherwise */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   <input
                     type="number"
+                    min={isServingBased ? 0.25 : 1}
+                    step={isServingBased ? 0.25 : 1}
                     value={current}
-                    onChange={(e) => onUpdateWeight(idx, Math.max(1, parseInt(e.target.value) || 0))}
+                    onChange={(e) => onUpdateWeight(idx, Math.max(isServingBased ? 0.25 : 1, parseFloat(e.target.value) || 0))}
                     className="field-input"
                     style={{
                       width: 62, textAlign: 'center', borderRadius: 8, padding: '5px 4px',
@@ -188,9 +193,9 @@ export function DraftItemList({ draftItems, onRemoveItem, onUpdateWeight, onUpda
                       fontFamily: 'var(--font-mono)', color: 'var(--sky-400)',
                     }}
                   />
-                  <span style={{ fontSize: 12, color: 'var(--fg-tertiary)', fontWeight: 500 }}>g</span>
+                  <span style={{ fontSize: 12, color: 'var(--fg-tertiary)', fontWeight: 500 }}>{isServingBased ? 'servings' : 'g'}</span>
                 </div>
-                <div className="multiplier-btn-group" style={{ flex: 1 }}>
+                {!isServingBased && <div className="multiplier-btn-group" style={{ flex: 1 }}>
                   {PORTION_MULTIPLIERS.map(({ factor, label }) => {
                     const target = Math.max(1, Math.round(base * factor))
                     const active = current === target
@@ -206,10 +211,10 @@ export function DraftItemList({ draftItems, onRemoveItem, onUpdateWeight, onUpda
                       </button>
                     )
                   })}
-                </div>
+                </div>}
               </div>
 
-              {showPerServing && (
+              {showPerServing && !isServingBased && (
                 <div style={{
                   display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8,
                   paddingTop: 8, borderTop: '1px solid var(--glass-edge)',

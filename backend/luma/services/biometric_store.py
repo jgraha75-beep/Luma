@@ -198,7 +198,7 @@ async def _refresh_biometrics_daily(rows: list[dict]) -> None:
         async with engine.connect() as conn:
             await conn.execution_options(isolation_level="AUTOCOMMIT")
             await conn.execute(
-                sa_text("CALL refresh_continuous_aggregate('biometrics_daily', :start, :end)"),
+                sa_text("CALL refresh_continuous_aggregate('biometrics_daily', CAST(:start AS timestamptz), CAST(:end AS timestamptz))"),
                 {"start": start, "end": end},
             )
         logger.debug("biometrics_daily refreshed for %s → %s", start.date(), end.date())

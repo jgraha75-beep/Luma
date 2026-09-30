@@ -19,10 +19,21 @@ fi
 cp .env.example .env
 
 # Stamp in cryptographically random secrets.
+PG_SEC=$(openssl rand -hex 32)
 JWT_SEC=$(openssl rand -hex 32)
 HAE_SEC=$(openssl rand -hex 32)
-sed -i "s/JWT_SECRET=.*/JWT_SECRET=${JWT_SEC}/" .env
-sed -i "s/HAE_SHARED_SECRET=.*/HAE_SHARED_SECRET=${HAE_SEC}/" .env
+replace_env_value() {
+    local expression="$1"
+    if [[ "$(uname)" == "Darwin" ]]; then
+        sed -i '' "$expression" .env
+    else
+        sed -i "$expression" .env
+    fi
+}
+
+replace_env_value "s/PG_PASSWORD=.*/PG_PASSWORD=${PG_SEC}/"
+replace_env_value "s/JWT_SECRET=.*/JWT_SECRET=${JWT_SEC}/"
+replace_env_value "s/HAE_SHARED_SECRET=.*/HAE_SHARED_SECRET=${HAE_SEC}/"
 
 # Generate VAPID keys for push notifications.
 # Requires Python 3 with the 'cryptography' package (pip install cryptography).
@@ -44,8 +55,8 @@ PYEOF
 if [ -n "$_VAPID_KEYS" ]; then
     _VAPID_PRIV=$(printf '%s' "$_VAPID_KEYS" | sed -n '1p')
     _VAPID_PUB=$(printf '%s'  "$_VAPID_KEYS" | sed -n '2p')
-    sed -i "s|^VAPID_PRIVATE_KEY=.*|VAPID_PRIVATE_KEY=${_VAPID_PRIV}|" .env
-    sed -i "s|^VAPID_PUBLIC_KEY=.*|VAPID_PUBLIC_KEY=${_VAPID_PUB}|"   .env
+    replace_env_value "s|^VAPID_PRIVATE_KEY=.*|VAPID_PRIVATE_KEY=${_VAPID_PRIV}|"
+    replace_env_value "s|^VAPID_PUBLIC_KEY=.*|VAPID_PUBLIC_KEY=${_VAPID_PUB}|"
     echo "Created .env with generated secrets (JWT, HAE, VAPID)."
 else
     echo "Created .env with generated secrets (JWT, HAE)."

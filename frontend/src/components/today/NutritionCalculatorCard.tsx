@@ -126,6 +126,11 @@ type MealBuilderItem = {
   brand: string | null
   serving_g: number
   nutrition: Record<string, number>
+  nutrition_basis?: 'per_100g' | 'per_serving'
+  serving_count?: number | null
+  nutrients_per_serving?: Record<string, number> | null
+  nutrient_source?: 'reference' | 'usda' | 'user' | 'off' | 'tabecal' | 'estimate'
+  source_id?: string | null
 }
 
 export function NutritionCalculatorCard({
@@ -184,6 +189,11 @@ export function NutritionCalculatorCard({
       brand: item.brand,
       serving_g: item.quantity_g,
       nutrition: item.nutrients,
+      nutrition_basis: item.nutrition_basis,
+      serving_count: item.serving_count,
+      nutrients_per_serving: item.nutrients_per_serving,
+      nutrient_source: item.nutrient_source,
+      source_id: item.source_id,
     }))
     setMealItems((prev) => [...prev, ...newItems])
     setMealName((prev) => (prev.trim() ? prev : fav.name))
@@ -471,6 +481,11 @@ export function NutritionCalculatorCard({
           brand: item.brand || null,
           quantity_g: item.serving_g,
           nutrients: item.nutrition,
+          nutrition_basis: item.nutrition_basis ?? 'per_100g',
+          serving_count: item.nutrition_basis === 'per_serving' ? (item.serving_count ?? 1) : null,
+          nutrients_per_serving: item.nutrition_basis === 'per_serving' ? (item.nutrients_per_serving ?? null) : null,
+          nutrient_source: item.nutrient_source ?? null,
+          source_id: item.source_id ?? null,
         })),
       }),
     onSuccess: async () => {

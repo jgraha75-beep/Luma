@@ -203,14 +203,22 @@ export function QuickTab({ currentSlot, onAddItems, favorites, onLogFavoriteDire
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {pagedFavs.map((fav) => {
                       const kcal = Math.round(fav.items.reduce((sum, i) => sum + (i.nutrients.calories ?? 0), 0))
-                      const favDraftItems: DraftItem[] = fav.items.map((i) => ({
-                        name: i.food_name,
-                        brand: i.brand ?? undefined,
-                        quantity: i.quantity_g,
-                        unit: 'g',
-                        estimated_weight_g: i.quantity_g,
-                        nutrients: toNutrients(i.nutrients),
-                      }))
+                      const favDraftItems: DraftItem[] = fav.items.map((i) => {
+                        const isServingBased = i.nutrition_basis === 'per_serving'
+                        return {
+                          name: i.food_name,
+                          brand: i.brand ?? undefined,
+                          quantity: isServingBased ? (i.serving_count ?? 1) : i.quantity_g,
+                          unit: isServingBased ? 'serving' : 'g',
+                          estimated_weight_g: i.quantity_g || 100,
+                          nutrients: toNutrients(i.nutrients),
+                          nutrition_basis: i.nutrition_basis,
+                          nutrients_per_serving: i.nutrients_per_serving ?? undefined,
+                          serving_count: i.serving_count ?? undefined,
+                          nutrient_source: i.nutrient_source,
+                          source_id: i.source_id ?? undefined,
+                        }
+                      })
                       return (
                         <button
                           key={fav.id}

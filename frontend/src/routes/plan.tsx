@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Shuffle, Sparkles, Plus, AlertTriangle, CalendarDays, ClipboardList, Clock, Calendar } from 'lucide-react'
+import { Shuffle, Sparkles, Plus, AlertTriangle, CalendarDays, ClipboardList, Clock, Calendar, Trash2 } from 'lucide-react'
 import { LumaLogo } from '../components/ui/LumaLogo'
 import { api } from '../lib/api'
 import {
@@ -19,6 +19,7 @@ import { PlanDayCard } from '../components/plan/PlanDayCard'
 import { ShoppingListView } from '../components/plan/ShoppingListView'
 import { SlotModal } from '../components/plan/SlotModal'
 import { WeekNav } from '../components/plan/WeekNav'
+import { type AiConfig } from '../components/settings/types'
 
 // ── Blank day card (shown before any plan is created) ─────────────────────────
 
@@ -93,6 +94,7 @@ export default function PlanRoute() {
   const [selectedSlot, setSelectedSlot] = useState<MealSlot | null>(null)
   const [activeTab, setActiveTab] = useState<'calendar' | 'shopping'>('calendar')
   const [pendingSlotKey, setPendingSlotKey] = useState<{ date: string; slotType: string } | null>(null)
+  const [generationError, setGenerationError] = useState<string | null>(null)
 
   const currentWeek = getWeekSunday()
   const nextWeek = addWeeks(currentWeek, 1)
@@ -144,6 +146,14 @@ export default function PlanRoute() {
     staleTime: 300_000,
   })
 
+  const { data: aiConfig, isLoading: isAiConfigLoading } = useQuery<AiConfig>({
+    queryKey: ['settings', 'ai-config'],
+    queryFn: () => api.get('/settings/ai-config'),
+    staleTime: 60_000,
+  })
+
+  const mealPlannerReady = aiConfig?.models.meal_planner.ready ?? false
+
   const moveMutation = useMutation({
     mutationFn: ({ slotId, newDate }: { slotId: string; newDate: string }) =>
       api.patch(`/plan/slot/${slotId}/move`, { new_date: newDate }),
@@ -162,8 +172,9 @@ export default function PlanRoute() {
       queryClient.invalidateQueries({ queryKey: ['plan'] })
       queryClient.invalidateQueries({ queryKey: ['plan-weeks'] })
       setCustomConstraints('')
+      setGenerationError(null)
     },
-    onError: () => alert('Failed to generate meal plan. Make sure your AI API key is configured.'),
+    onError: (error: Error) => setGenerationError(error.message),
   })
 
   const initMutation = useMutation({
@@ -173,6 +184,26 @@ export default function PlanRoute() {
       queryClient.invalidateQueries({ queryKey: ['plan-weeks'] })
     },
   })
+
+  const deleteMutation = useMutation({
+    mutationFn: (planId: string) => api.delete(`/plan/${planId}`),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['plan', selectedWeek] }),
+        queryClient.invalidateQueries({ queryKey: ['plan-weeks'] }),
+        queryClient.invalidateQueries({ queryKey: ['shopping'] }),
+      ])
+      setActiveTab('calendar')
+    },
+  })
+
+  function handleDeletePlan() {
+    if (!plan || deleteMutation.isPending) return
+    const weekLabel = formatWeekLabel(plan.week_start)
+    if (window.confirm(`Remove the weekly plan for ${weekLabel}? This deletes its planned meals and shopping list. Logged meals will remain in your history.`)) {
+      deleteMutation.mutate(plan.id)
+    }
+  }
 
   // After blank init, auto-open the slot the user clicked
   useEffect(() => {
@@ -222,6 +253,11 @@ export default function PlanRoute() {
   }, [plan])
 
   function handleGenerate(week: string, text: string) {
+    if (!mealPlannerReady) {
+      setGenerationError('AI meal planning is unavailable until a provider key or local AI endpoint is configured.')
+      return
+    }
+    setGenerationError(null)
     generateMutation.mutate({ week, text })
   }
 
@@ -305,9 +341,19 @@ export default function PlanRoute() {
           <div className="plan-header-controls plan-sticky-controls">
             <button
               className="btn"
+              style={{ padding: '10px 12px', color: 'var(--bad)', borderColor: 'rgba(239,68,68,0.35)' }}
+              onClick={handleDeletePlan}
+              disabled={deleteMutation.isPending || generateMutation.isPending}
+              title="Remove this weekly plan"
+            >
+              <Trash2 size={15} />
+              {deleteMutation.isPending ? 'Removing…' : 'Remove plan'}
+            </button>
+            <button
+              className="btn"
               style={{ padding: '10px 14px' }}
               onClick={() => handleGenerate(selectedWeek, customConstraints)}
-              disabled={generateMutation.isPending}
+              disabled={generateMutation.isPending || !mealPlannerReady}
             >
               <Shuffle size={15} />
               {generateMutation.isPending ? 'Generating…' : 'Regenerate'}
@@ -326,6 +372,27 @@ export default function PlanRoute() {
           </div>
         )}
       </header>
+
+      {!isAiConfigLoading && !mealPlannerReady && (
+        <div className="plan-ai-status" role="status">
+          <AlertTriangle size={15} />
+          <span>AI meal planning is not configured. Manual meal planning is still available.</span>
+        </div>
+      )}
+
+      {generationError && (
+        <div className="plan-ai-status plan-ai-status-error" role="alert">
+          <AlertTriangle size={15} />
+          <span>{generationError}</span>
+        </div>
+      )}
+
+      {deleteMutation.isError && (
+        <div className="plan-ai-status plan-ai-status-error" role="alert">
+          <AlertTriangle size={15} />
+          <span>{(deleteMutation.error as Error).message || 'Unable to remove this weekly plan.'}</span>
+        </div>
+      )}
 
       {/* End-of-week nudge: suggest planning next week */}
       {showNextWeekNudge && !generateMutation.isPending && (
@@ -379,7 +446,7 @@ export default function PlanRoute() {
                 <button
                   className="btn"
                   onClick={handleUseLastWeekTemplate}
-                  disabled={generateMutation.isPending}
+                  disabled={generateMutation.isPending || !mealPlannerReady}
                 >
                   <ClipboardList size={12} /> Use last week
                 </button>
@@ -387,10 +454,10 @@ export default function PlanRoute() {
               <button
                 className="btn"
                 onClick={() => handleGenerate(selectedWeek, customConstraints)}
-                disabled={generateMutation.isPending}
+                disabled={generateMutation.isPending || !mealPlannerReady}
               >
                 <Sparkles size={12} />
-                Generate with AI
+                {mealPlannerReady ? 'Generate with AI' : 'AI setup required'}
               </button>
             </div>
           </div>

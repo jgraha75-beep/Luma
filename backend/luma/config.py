@@ -1,8 +1,18 @@
 from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import field_validator, model_validator
+from pydantic import ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+DEFAULT_PRIMARY_MODELS = {
+    "food_extractor_model": "gemini/gemini-3.5-flash",
+    "vision_classifier_model": "gemini/gemini-3.5-flash",
+    "meal_planner_model": "anthropic/claude-sonnet-4-5",
+    "coach_model": "gemini/gemini-3.5-flash",
+    "insight_narrator_model": "gemini/gemini-3.5-flash",
+    "recipe_import_model": "gemini/gemini-3.5-flash",
+}
 
 
 class Settings(BaseSettings):
@@ -22,8 +32,11 @@ class Settings(BaseSettings):
     local_ai_api_key: str = ""
     whisper_url: str = "http://whisper:9000"
     anthropic_api_key: str = ""
+    anthropic_workspace_id: str = ""
     gemini_api_key: str = ""
     usda_api_key: str = ""
+    tabecal_api_base: str = "https://tabecal.com/api/v1"
+    tabecal_api_key: str = ""
 
     # Primary model routes — prefix determines provider:
     #   local/<id>     → LOCAL_AI_API_BASE (Ollama / LocalAI)
@@ -82,6 +95,13 @@ class Settings(BaseSettings):
 
     environment: Literal["development", "production"] = "development"
     cors_origins: Any = ["http://localhost:5173"]
+
+    @field_validator(*DEFAULT_PRIMARY_MODELS, mode="before")
+    @classmethod
+    def restore_blank_primary_model_default(cls, value: Any, info: ValidationInfo) -> Any:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return DEFAULT_PRIMARY_MODELS[info.field_name]
+        return value
 
     @field_validator("server_timezone")
     @classmethod

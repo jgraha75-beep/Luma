@@ -8,9 +8,10 @@ import ActivityRings from '../components/ui/ActivityRings'
 import { MacroBar } from '../components/today/MacroBar'
 import { RecentMealsCard, type RecentMeal } from '../components/today/RecentMealsCard'
 import { NutrientBreakdownList } from '../components/today/NutrientBreakdownList'
-import { RingLegend } from '../components/today/RingLegend'
 import { computeCoverage, computeFlags, buildCoachSeed } from '../lib/nutrient-coverage'
 import Spark from '../components/ui/Spark'
+import type { NutritionFocusSettings } from '../components/settings/types'
+import { NutritionFocusSummary } from '../components/today/NutritionFocusSummary'
 
 type Nutrition = Record<string, number>
 type Targets = NutritionHistory['targets']
@@ -25,7 +26,7 @@ const RING_COLORS = [
 const WEEKDAY_LABELS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'] // Mon → Sun
 
 interface MetricDef {
-  key: keyof Targets
+  key: string
   label: string
   unit: string
   digits: number
@@ -126,7 +127,7 @@ function MetricCard({ def, logged, target, history }: { def: MetricDef; logged: 
             / {target != null ? fmt(target, def.digits) : '—'} {def.unit}
           </span>
         </div>
-        <MacroBar pct={pct ?? 0} color={v.barColor} glow={v.glow} height={3} marginTop={8} />
+        {target != null && <MacroBar pct={pct ?? 0} color={v.barColor} glow={v.glow} height={3} marginTop={8} />}
       </div>
       {showSpark && (
         <div style={{ marginTop: 4, height: 28, opacity: 0.85 }}>
@@ -196,6 +197,12 @@ export default function NutritionRoute() {
     staleTime: 5 * 60 * 1000,
   })
 
+  const { data: focus } = useQuery<NutritionFocusSettings>({
+    queryKey: ['nutrition-focus'],
+    queryFn: () => api.get('/settings/nutrition-focus'),
+    staleTime: 5 * 60 * 1000,
+  })
+
   const days = useMemo(() => history?.days ?? [], [history])
   const todayIso = days.length ? days[days.length - 1].date : dateToIso(new Date())
   const earliestIso = days.length ? days[0].date : todayIso
@@ -211,6 +218,21 @@ export default function NutritionRoute() {
     calories: null, saturated_fat_g: null, soluble_fiber_g: null, sodium_mg: null, protein_g: null,
   }
   const nutrition: Nutrition = byDate.get(activeDate)?.nutrition ?? {}
+
+  const focusMetrics = focus?.available_metrics ?? METRICS.map((metric) => ({
+    id: metric.key,
+    label: metric.label,
+    unit: metric.unit,
+    direction: metric.dir === 'band' ? 'info' as const : metric.dir === 'max' ? 'max' as const : 'min' as const,
+  }))
+  const focusIds = focus?.metrics ?? METRICS.map((metric) => metric.key)
+  const focusAdherence = Object.fromEntries(
+    focusMetrics.map((metric) => {
+      const target = (targets as unknown as Record<string, number | null>)[metric.id] ?? null
+      const logged = nutrition[metric.id] ?? 0
+      return [metric.id, { logged, target, pct: target ? (logged / target) * 100 : null }]
+    })
+  )
 
   const { data: dayDetail } = useQuery<{ date: string; meals: RecentMeal[] }>({
     queryKey: ['day-meals', activeDate],
@@ -258,13 +280,6 @@ export default function NutritionRoute() {
   const dateFull = d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
 
   const week = weekOf(activeDate)
-  const rings = ringValues(nutrition, targets)
-
-  const calPct = targets.calories && targets.calories > 0 ? ((nutrition.calories ?? 0) / targets.calories) * 100 : null
-  const calVis = metricVisual(calPct, 'band', 'calories')
-  const sodiumPct = targets.sodium_mg && targets.sodium_mg > 0 ? ((nutrition.sodium_mg ?? 0) / targets.sodium_mg) * 100 : null
-  const sodiumVis = metricVisual(sodiumPct, 'max', 'sodium_mg')
-
   const coverage = computeCoverage(nutrition, dri)
   const flags = computeFlags(nutrition, dri, 3)
   const trendWindow = days.slice(-30)
@@ -328,69 +343,17 @@ export default function NutritionRoute() {
             </button>
           </div>
 
-          {/* Hero rings */}
+          {/* User-selected focus */}
           <div
             className="glass"
             onTouchStart={onTouchStart}
             onTouchEnd={onTouchEnd}
-            style={{ padding: '24px 20px', display: 'flex', flexDirection: 'column', position: 'relative' }}
+            style={{ padding: '20px', display: 'flex', flexDirection: 'column', position: 'relative' }}
           >
-            {/* Calories + Sodium header */}
-            <div style={{ display: 'grid', gridTemplateColumns: targets.sodium_mg ? '1fr 1fr' : '1fr', gap: 0, marginBottom: 16 }}>
-              <div style={{ paddingRight: targets.sodium_mg ? 20 : 0 }}>
-                <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--fg-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Calories</span>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, marginTop: 3 }}>
-                  <span className="num" style={{ fontSize: 30, fontWeight: 300, color: calVis.numColor, letterSpacing: '-0.03em', lineHeight: 1, transition: 'color 400ms' }}>
-                    {fmt(nutrition.calories ?? 0, 0)}
-                  </span>
-                  <span style={{ fontSize: 13, color: 'var(--fg-tertiary)' }}>/ {targets.calories != null ? fmt(targets.calories, 0) : '—'} kcal</span>
-                </div>
-                <MacroBar pct={calPct ?? 0} color={calVis.barColor} glow={calVis.glow} height={3} marginTop={8} />
-              </div>
-              {targets.sodium_mg && (
-                <div style={{ paddingLeft: 20, borderLeft: '1px solid var(--glass-edge)' }}>
-                  <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--fg-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Sodium</span>
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, marginTop: 3 }}>
-                    <span className="num" style={{ fontSize: 22, fontWeight: 300, color: sodiumVis.numColor, letterSpacing: '-0.02em', lineHeight: 1, transition: 'color 400ms' }}>
-                      {fmt(nutrition.sodium_mg ?? 0, 0)}
-                    </span>
-                    <span style={{ fontSize: 13, color: 'var(--fg-tertiary)' }}>/ {fmt(targets.sodium_mg, 0)} mg</span>
-                  </div>
-                  <MacroBar pct={sodiumPct ?? 0} color={sodiumVis.barColor} glow={sodiumVis.glow} height={3} marginTop={8} />
-                </div>
-              )}
-            </div>
-
-            <hr style={{ border: 'none', borderTop: '1px solid var(--glass-edge)', margin: '0 0 20px 0' }} />
-
-            <div style={{ display: 'flex', gap: 16, alignItems: 'center', justifyContent: 'center', minWidth: 0 }}>
-              <div style={{ flexShrink: 0 }}>
-                <div style={{ width: 140, height: 140 }}>
-                  <ActivityRings key={activeDate} size={140} values={rings} colors={RING_COLORS} thickness={12} gap={5} />
-                </div>
-              </div>
-              <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <RingLegend
-                  color="var(--sun-400)"
-                  label="Sat fat"
-                  value={`${fmt(nutrition.saturated_fat_g ?? 0, 1, 'g')} / ${fmt(targets.saturated_fat_g, 1, 'g')}`}
-                  pct={targets.saturated_fat_g ? Math.round(((nutrition.saturated_fat_g ?? 0) / targets.saturated_fat_g) * 100) : 0}
-                  invert
-                />
-                <RingLegend
-                  color="var(--good)"
-                  label="Sol. fiber"
-                  value={`${fmt(nutrition.soluble_fiber_g ?? 0, 1, 'g')} / ${fmt(targets.soluble_fiber_g, 1, 'g')}`}
-                  pct={targets.soluble_fiber_g ? Math.round(((nutrition.soluble_fiber_g ?? 0) / targets.soluble_fiber_g) * 100) : 0}
-                />
-                <RingLegend
-                  color="var(--aurora-violet)"
-                  label="Protein"
-                  value={`${fmt(nutrition.protein_g ?? 0, 0, 'g')} / ${fmt(targets.protein_g, 0, 'g')}`}
-                  pct={targets.protein_g ? Math.round(((nutrition.protein_g ?? 0) / targets.protein_g) * 100) : 0}
-                />
-              </div>
-            </div>
+            <NutritionFocusSummary
+              focus={focus ?? { preset: 'custom', metrics: focusIds, available_metrics: focusMetrics }}
+              adherence={focusAdherence}
+            />
           </div>
 
           {/* Segmented tabs */}
@@ -416,10 +379,16 @@ export default function NutritionRoute() {
           {tab === 'summary' ? (
             <>
               <div className="glass" style={{ padding: 18 }}>
-                <div className="eyebrow" style={{ marginBottom: 12 }}>Targets</div>
+                <div className="eyebrow" style={{ marginBottom: 12 }}>Focus metrics</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {METRICS.map(m => (
-                    <MetricCard key={m.key} def={m} logged={nutrition[m.key as string] ?? 0} target={targets[m.key]} history={trendWindow} />
+                  {focusMetrics.filter((metric) => focusIds.includes(metric.id)).map((metric) => (
+                    <MetricCard
+                      key={metric.id}
+                      def={{ key: metric.id, label: metric.label, unit: metric.unit, digits: metric.unit === 'g' && metric.id !== 'protein_g' ? 1 : 0, dir: metric.direction === 'info' ? 'band' : metric.direction }}
+                      logged={nutrition[metric.id] ?? 0}
+                      target={(targets as unknown as Record<string, number | null>)[metric.id] ?? null}
+                      history={trendWindow}
+                    />
                   ))}
                 </div>
               </div>

@@ -23,10 +23,12 @@ import { HaeMetricsCard } from '../components/settings/HaeMetricsCard'
 import { HaeImportCard } from '../components/settings/HaeImportCard'
 import { HealthConnectCard } from '../components/settings/HealthConnectCard'
 import { DataSourcePicker } from '../components/settings/DataSourcePicker'
+import { WhoopStatusCard } from '../components/settings/WhoopStatusCard'
 import { HaeDiagnosticCard } from '../components/settings/HaeDiagnosticCard'
 import { HaeAnalyzeCard } from '../components/settings/HaeAnalyzeCard'
 import { InsightsDiagnosticCard } from '../components/settings/InsightsDiagnosticCard'
 import { MetricVisibilityCard } from '../components/settings/MetricVisibilityCard'
+import { NutritionFocusCard } from '../components/settings/NutritionFocusCard'
 import { ProfileCard } from '../components/settings/ProfileCard'
 import { useMeasurementSystem, convertWeightToKg } from '../lib/measurements'
 
@@ -352,6 +354,7 @@ function AccountTab({
         <div className="settings-order-profile">
           <ProfileCard />
         </div>
+        <NutritionFocusCard />
         <div className="settings-order-suggested">
           <RecommendGoalsCard onApply={onApplyRecommendations} isSaving={isPending} />
         </div>
@@ -379,6 +382,7 @@ function DataSourcesTab({ user, isOperator }: { user: User | undefined; isOperat
       <div className="settings-stack settings-primary">
         <DataSourcePicker />
         {source === 'health_connect' ? <HealthConnectCard /> : <HaeImportCard />}
+        <WhoopStatusCard />
         <HaeMetricsCard />
         <MetricVisibilityCard />
       </div>

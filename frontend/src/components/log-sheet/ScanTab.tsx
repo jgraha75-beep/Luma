@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useLayoutEffect, useId } from 'react'
 import { Camera, ImagePlus, X, Plus, CheckCircle, SlidersHorizontal, ChevronDown } from 'lucide-react'
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode'
 import { api, csrfHeaders, refreshSession } from '../../lib/api'
+import { normalizeBarcode } from '../../lib/barcode'
 import { toNutrients, scaleNutrients } from '../../lib/nutrients'
 import { NutritionFactsEditor } from './NutritionFactsEditor'
 import {
@@ -108,12 +109,19 @@ export function ScanTab({ onAddItems, draftItems, onRemoveItem, onUpdateWeight, 
         { fps: 10, qrbox: { width: 250, height: 130 } },
         async (code: string) => {
           if (fired) return
+          const barcode = normalizeBarcode(code)
+          if (!barcode) {
+            fired = true
+            setBarcodeError('That barcode format is not supported')
+            setIsScanning(false)
+            return
+          }
           fired = true
           setBarcodeError('')
           setBarcodeLoading(true)
           setIsScanning(false)
           try {
-            const food = await api.post<Record<string, unknown>>('/log/meal/barcode', { barcode: code })
+            const food = await api.post<Record<string, unknown>>('/log/meal/barcode', { barcode })
             const measures = food.household_measures as HouseholdMeasure[] | undefined
             setPending({
               id: food.id as string,

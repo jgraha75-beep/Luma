@@ -153,15 +153,22 @@ async def _execute_tool(name: str, args: dict, user_id: str, db, unit_system: st
 
     if name == "query_nutrition_rollup":
         # Day boundaries follow SERVER_TIMEZONE so rollups match what the user
-        # sees on /today and in the streak breakdown, not the UTC clock.
+        # sees on /today and in the streak breakdown, not the UTC clock. Return
+        # the full nutrition map so the user's selected focus is queryable.
         rows = await db.execute(
             text("""
                 SELECT
                     DATE(ts AT TIME ZONE :tz) AS day,
-                    SUM(CAST(nutrition->>'calories' AS float)) AS calories,
-                    SUM(CAST(nutrition->>'saturated_fat_g' AS float)) AS sat_fat_g,
-                    SUM(CAST(nutrition->>'soluble_fiber_g' AS float)) AS fiber_g,
-                    SUM(CAST(nutrition->>'protein_g' AS float)) AS protein_g
+                    COALESCE(SUM(CAST(NULLIF(nutrition->>'calories', '') AS float)), 0) AS calories,
+                    COALESCE(SUM(CAST(NULLIF(nutrition->>'protein_g', '') AS float)), 0) AS protein_g,
+                    COALESCE(SUM(CAST(NULLIF(nutrition->>'carbohydrates_g', '') AS float)), 0) AS carbohydrates_g,
+                    COALESCE(SUM(CAST(NULLIF(nutrition->>'fat_g', '') AS float)), 0) AS fat_g,
+                    COALESCE(SUM(CAST(NULLIF(nutrition->>'saturated_fat_g', '') AS float)), 0) AS saturated_fat_g,
+                    COALESCE(SUM(CAST(NULLIF(nutrition->>'soluble_fiber_g', '') AS float)), 0) AS soluble_fiber_g,
+                    COALESCE(SUM(CAST(NULLIF(nutrition->>'sodium_mg', '') AS float)), 0) AS sodium_mg,
+                    COALESCE(SUM(CAST(NULLIF(nutrition->>'sugars_g', '') AS float)), 0) AS sugars_g,
+                    COALESCE(SUM(CAST(NULLIF(nutrition->>'added_sugars_g', '') AS float)), 0) AS added_sugars_g,
+                    COALESCE(SUM(CAST(NULLIF(nutrition->>'cholesterol_mg', '') AS float)), 0) AS cholesterol_mg
                 FROM meal_events
                 WHERE user_id = :uid
                   AND DATE(ts AT TIME ZONE :tz) BETWEEN :start AND :end
@@ -175,13 +182,13 @@ async def _execute_tool(name: str, args: dict, user_id: str, db, unit_system: st
                 "end": parse_date(args["end_date"]),
             },
         )
-        data = [
-            {"day": str(r.day), "calories": r.calories, "sat_fat_g": r.sat_fat_g,
-             "fiber_g": r.fiber_g, "protein_g": r.protein_g}
-            for r in rows
-        ]
+        keys = (
+            "calories", "protein_g", "carbohydrates_g", "fat_g", "saturated_fat_g",
+            "soluble_fiber_g", "sodium_mg", "sugars_g", "added_sugars_g", "cholesterol_mg",
+        )
+        data = [{"day": str(r.day), **{key: getattr(r, key) for key in keys}} for r in rows]
         if args.get("period") == "weekly" and data:
-            avg = {k: sum(d[k] or 0 for d in data) / len(data) for k in ["calories", "sat_fat_g", "fiber_g", "protein_g"]}
+            avg = {k: sum(d[k] or 0 for d in data) / len(data) for k in keys}
             return json.dumps({"weekly_avg": avg})
         return json.dumps(data)
 

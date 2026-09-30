@@ -6,7 +6,8 @@ import {
   type PortionUnit, type HouseholdMeasure, PORTION_UNITS, PORTION_UNIT_LABELS, PRESETS_BY_UNIT,
   gramsForFoodUnit, defaultQtyForUnit,
 } from '../../lib/portions'
-import { scaleNutrients, toNutrients } from '../../lib/nutrients'
+import { scaleNutrients, scaleServingNutrients, toNutrients } from '../../lib/nutrients'
+import { normalizeBarcode } from '../../lib/barcode'
 import { DraftItemList } from './DraftItemList'
 import { nutrientSourceForFood, type DraftItem, type Favorite } from './types'
 
@@ -24,6 +25,9 @@ type FoodResult = {
   source?: string
   serving_size_g?: number
   nutrients_per_100g: Record<string, number>
+  nutrition_basis?: 'per_100g' | 'per_serving'
+  nutrients_per_serving?: Record<string, number>
+  metadata?: Record<string, unknown>
   household_measures?: HouseholdMeasure[]
   flags?: string[]
 }
@@ -84,6 +88,7 @@ type Props = {
 
 export function IngredientBuilder({ draftItems, onAddItem, onRemoveItem, onUpdateWeight, onUpdateName, emptyStateMessage, favorites, onPickFavorite, onReplaceItem, servings }: Props) {
   const [query, setQuery]               = useState('')
+  const [searchMode, setSearchMode]     = useState<'us' | 'japan'>('us')
   const [results, setResults]           = useState<FoodResult[]>([])
   const [isSearching, setIsSearching]   = useState(false)
   const [pending, setPending]           = useState<FoodResult | null>(null)
@@ -122,17 +127,30 @@ export function IngredientBuilder({ draftItems, onAddItem, onRemoveItem, onUpdat
     const t = setTimeout(async () => {
       setIsSearching(true)
       try {
-        const params = new URLSearchParams()
-        params.set('q', query.trim())
-        const res: unknown = await api.get(`/foods/search?${params.toString()}`)
+        const params = new URLSearchParams({ q: query.trim() })
+        const res: unknown = await api.get(searchMode === 'japan' ? `/foods/japan/search?${params.toString()}` : `/foods/search?${params.toString()}`)
         const foods = Array.isArray(res) ? res : ((res as Record<string, unknown>)?.results ?? []) as FoodResult[]
-        setResults(foods as FoodResult[])
+        setResults(searchMode === 'japan'
+          ? (foods as Array<Record<string, unknown>>).map((food) => ({
+              id: String(food.source_id ?? ''),
+              name: String(food.name ?? 'Japanese menu item'),
+              brand: typeof food.brand === 'string' ? food.brand : undefined,
+              source: 'tabecal',
+              nutrition_basis: 'per_serving',
+              nutrients_per_100g: {},
+              nutrients_per_serving: Object.fromEntries(
+                Object.entries((food.nutrients as Record<string, unknown> | undefined) ?? {})
+                  .filter(([, value]) => typeof value === 'number')
+              ) as Record<string, number>,
+              metadata: (food.metadata as Record<string, unknown> | undefined) ?? {},
+            }))
+          : foods as FoodResult[])
       } catch { /* ignore */ } finally {
         setIsSearching(false)
       }
     }, 300)
     return () => clearTimeout(t)
-  }, [query, pending])
+  }, [query, pending, searchMode])
 
   function selectFood(food: FoodResult) {
     setPending(food)
@@ -140,8 +158,9 @@ export function IngredientBuilder({ draftItems, onAddItem, onRemoveItem, onUpdat
     // Default to the food's own first household measure when it has one
     // (e.g. a scanned product logs as "1 serving"); otherwise fall back to grams.
     const hasMeasures = (food.household_measures?.length ?? 0) > 0
-    setPendingUnit(hasMeasures ? 'hm:0' : 'g')
-    setPendingQty(String(hasMeasures ? 1 : Math.round(food.serving_size_g || 100)))
+    const isServingBased = food.nutrition_basis === 'per_serving'
+    setPendingUnit(isServingBased ? 'serving' : hasMeasures ? 'hm:0' : 'g')
+    setPendingQty(String(isServingBased || hasMeasures ? 1 : Math.round(food.serving_size_g || 100)))
     setQuery('')
     setResults([])
     setIsScanning(false)
@@ -184,9 +203,15 @@ export function IngredientBuilder({ draftItems, onAddItem, onRemoveItem, onUpdat
         async (code: string) => {
           if (fired) return
           fired = true
+          const barcode = normalizeBarcode(code)
+          if (!barcode) {
+            setBarcodeError('That barcode format is not supported')
+            setIsScanning(false)
+            return
+          }
           setBarcodeError('')
           try {
-            const food = await api.post<Record<string, unknown>>('/log/meal/barcode', { barcode: code })
+            const food = await api.post<Record<string, unknown>>('/log/meal/barcode', { barcode })
             selectFoodRef.current({
               id: food.id as string,
               name: food.name as string,
@@ -233,15 +258,21 @@ export function IngredientBuilder({ draftItems, onAddItem, onRemoveItem, onUpdat
     const unitLabel = pendingUnit.startsWith('hm:')
       ? (pending.household_measures?.[Number(pendingUnit.slice(3))]?.label ?? 'serving')
       : pendingUnit
+    const isServingBased = pending.nutrition_basis === 'per_serving'
+    const servingNutrients = pending.nutrients_per_serving ?? {}
     const item: DraftItem = {
       name: pending.name,
       brand: pending.brand,
       quantity: qty,
       unit: unitLabel,
-      estimated_weight_g: grams,
-      base_weight_g: grams,
-      nutrients: scaleNutrients(pending.nutrients_per_100g, grams),
-      food_id: pending.id,
+      estimated_weight_g: isServingBased ? Math.round(pending.serving_size_g ?? 100) : grams,
+      base_weight_g: isServingBased ? Math.round(pending.serving_size_g ?? 100) : grams,
+      nutrients: isServingBased ? scaleServingNutrients(servingNutrients, qty) : scaleNutrients(pending.nutrients_per_100g, grams),
+      nutrients_per_serving: isServingBased ? servingNutrients : undefined,
+      serving_count: isServingBased ? qty : undefined,
+      nutrition_basis: isServingBased ? 'per_serving' : 'per_100g',
+      food_id: isServingBased ? undefined : pending.id,
+      source_id: isServingBased ? pending.id : undefined,
       nutrient_source: nutrientSourceForFood(pending.source, pending.brand),
       source: 'search',
     }
@@ -264,15 +295,23 @@ export function IngredientBuilder({ draftItems, onAddItem, onRemoveItem, onUpdat
     : []
 
   function pickFavorite(fav: Favorite) {
-    const items: DraftItem[] = fav.items.map((i) => ({
-      name: i.food_name,
-      brand: i.brand ?? undefined,
-      quantity: i.quantity_g,
-      unit: 'g',
-      estimated_weight_g: i.quantity_g,
-      base_weight_g: i.quantity_g,
-      nutrients: toNutrients(i.nutrients),
-    }))
+    const items: DraftItem[] = fav.items.map((i) => {
+      const isServingBased = i.nutrition_basis === 'per_serving'
+      return {
+        name: i.food_name,
+        brand: i.brand ?? undefined,
+        quantity: isServingBased ? (i.serving_count ?? 1) : i.quantity_g,
+        unit: isServingBased ? 'serving' : 'g',
+        estimated_weight_g: i.quantity_g || 100,
+        base_weight_g: i.quantity_g || 100,
+        nutrients: toNutrients(i.nutrients),
+        nutrition_basis: i.nutrition_basis,
+        nutrients_per_serving: i.nutrients_per_serving ?? undefined,
+        serving_count: i.serving_count ?? undefined,
+        nutrient_source: i.nutrient_source,
+        source_id: i.source_id ?? undefined,
+      }
+    })
     onPickFavorite?.(items, fav.name)
     setQuery('')
     setResults([])
@@ -280,9 +319,13 @@ export function IngredientBuilder({ draftItems, onAddItem, onRemoveItem, onUpdat
 
   const pendingMeasures = pending?.household_measures ?? []
   const pendingQtyNum = parseFloat(pendingQty) || 0
+  const pendingServingBased = pending?.nutrition_basis === 'per_serving'
   const pendingG = pending ? gramsForFoodUnit(pending, pendingUnit, pendingQtyNum) : 0
-  const pendingKcal = pending ? Math.round((pending.nutrients_per_100g.calories || 0) * (pendingG / 100)) : 0
-  const pendingProtein = pending ? ((pending.nutrients_per_100g.protein_g || 0) * (pendingG / 100)).toFixed(1) : '0'
+  const pendingNutrients = pendingServingBased
+    ? scaleServingNutrients(pending?.nutrients_per_serving ?? {}, pendingQtyNum)
+    : pending ? scaleNutrients(pending.nutrients_per_100g, pendingG) : toNutrients(undefined)
+  const pendingKcal = pending ? Math.round(pendingNutrients.calories || 0) : 0
+  const pendingProtein = pending ? (pendingNutrients.protein_g || 0).toFixed(1) : '0'
   const pendingPresets = pendingUnit.startsWith('hm:') ? [0.5, 1, 2, 3] : PRESETS_BY_UNIT[pendingUnit as PortionUnit]
 
   return (
@@ -345,6 +388,7 @@ export function IngredientBuilder({ draftItems, onAddItem, onRemoveItem, onUpdat
             <select
               value={pendingUnit}
               onChange={(e) => changeUnit(e.target.value)}
+              disabled={pending.nutrition_basis === 'per_serving'}
               className="field-input"
               style={{
                 borderRadius: 8, padding: '7px 8px', fontSize: 12, flexShrink: 0, maxWidth: 150,
@@ -352,12 +396,14 @@ export function IngredientBuilder({ draftItems, onAddItem, onRemoveItem, onUpdat
                 color: 'var(--fg-secondary)', cursor: 'pointer', fontFamily: 'var(--font-sans)',
               }}
             >
-              {pendingMeasures.map((m, i) => (
+              {pending.nutrition_basis !== 'per_serving' && pendingMeasures.map((m, i) => (
                 <option key={`hm:${i}`} value={`hm:${i}`} style={{ background: 'var(--bg-2)', color: 'var(--fg-primary)' }}>
                   {m.label} ({Math.round(m.grams)}g)
                 </option>
               ))}
-              {PORTION_UNITS.map((u) => (
+              {pending.nutrition_basis === 'per_serving' ? (
+                <option value="serving" style={{ background: 'var(--bg-2)', color: 'var(--fg-primary)' }}>serving</option>
+              ) : PORTION_UNITS.map((u) => (
                 <option key={u} value={u} style={{ background: 'var(--bg-2)', color: 'var(--fg-primary)' }}>
                   {PORTION_UNIT_LABELS[u]}
                 </option>
@@ -387,7 +433,9 @@ export function IngredientBuilder({ draftItems, onAddItem, onRemoveItem, onUpdat
 
           {pendingG > 0 && (
             <div style={{ fontSize: 11, color: 'var(--fg-tertiary)', paddingLeft: 2 }}>
-              {pendingUnit !== 'g' && (
+              {pending.nutrition_basis === 'per_serving' ? (
+                <>Nutrition values are for one complete menu serving · </>
+              ) : pendingUnit !== 'g' && (
                 <>= <span className="num" style={{ color: 'var(--fg-secondary)' }}>{Math.round(pendingG)}</span> g · </>
               )}
               ≈ <span className="num" style={{ color: 'var(--fg-secondary)' }}>{pendingKcal}</span> kcal ·{' '}
@@ -407,6 +455,22 @@ export function IngredientBuilder({ draftItems, onAddItem, onRemoveItem, onUpdat
         </div>
       ) : (
         <div>
+          <div className="segmented-picker" style={{ width: '100%', marginBottom: 8 }} aria-label="Food database">
+            <button
+              type="button"
+              data-active={searchMode === 'us' ? 'true' : 'false'}
+              onClick={() => { setSearchMode('us'); setResults([]) }}
+            >
+              US foods
+            </button>
+            <button
+              type="button"
+              data-active={searchMode === 'japan' ? 'true' : 'false'}
+              onClick={() => { setSearchMode('japan'); setResults([]) }}
+            >
+              Japan menus
+            </button>
+          </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
             <div style={{
               flex: 1, display: 'flex', alignItems: 'center', gap: 8,
@@ -419,7 +483,7 @@ export function IngredientBuilder({ draftItems, onAddItem, onRemoveItem, onUpdat
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search oats, salmon, chicken breast…"
+                placeholder={searchMode === 'japan' ? 'Search Japanese menus — try 牛丼…' : 'Search oats, salmon, chicken breast…'}
                 className="field-input"
                 style={{
                   flex: 1, background: 'transparent', border: 'none', outline: 'none',
@@ -609,11 +673,15 @@ export function IngredientBuilder({ draftItems, onAddItem, onRemoveItem, onUpdat
                 <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {food.name}
                 </div>
-                <div style={{ fontSize: 11, color: 'var(--fg-quiet)' }}>{food.brand || 'USDA reference'}</div>
-                <FlagBadges flags={food.flags} />
+                <div style={{ fontSize: 11, color: 'var(--fg-quiet)' }}>{food.brand || (searchMode === 'japan' ? 'Tabecal' : 'USDA reference')}</div>
+                {searchMode === 'japan' ? (
+                  <div style={{ fontSize: 10, color: 'var(--fg-tertiary)', marginTop: 3 }}>Official menu values · per serving</div>
+                ) : <FlagBadges flags={food.flags} />}
               </div>
               <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--sky-300)', background: 'rgba(56,189,248,0.10)', padding: '2px 8px', borderRadius: 999, flexShrink: 0 }}>
-                {Math.round(food.nutrients_per_100g.calories || 0)} /100g
+                {searchMode === 'japan'
+                  ? `${Math.round(food.nutrients_per_serving?.calories || 0)} /serving`
+                  : `${Math.round(food.nutrients_per_100g.calories || 0)} /100g`}
               </span>
             </button>
           ))}

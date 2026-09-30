@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Search, X, ArrowLeft, Flame, CheckCircle2, Heart, Camera, Shield, Wheat, Dumbbell, Sprout } from 'lucide-react'
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode'
 import { api } from '../../lib/api'
+import { normalizeBarcode } from '../../lib/barcode'
 import { type FoodResult } from '../plan/types'
 import { FOOD_CATEGORIES, SAT_FAT_COLORS, categoryMatchesFlags, type FoodCategory } from '../../lib/food-categories'
 
@@ -343,9 +344,14 @@ export function FoodsTab() {
     let stopRequested = false
     const handleDecode = async (code: string) => {
       setBarcodeError('')
+      const barcode = normalizeBarcode(code)
+      if (!barcode) {
+        setBarcodeError('That barcode format is not supported')
+        return
+      }
       setBarcodeLoading(true)
       try {
-        const food = await api.get<FoodResult>(`/foods/barcode/${encodeURIComponent(code)}`)
+        const food = await api.get<FoodResult>(`/foods/barcode/${encodeURIComponent(barcode)}`)
         setBarcodeResult(food)
       } catch (err: unknown) {
         setBarcodeError((err as Error).message || 'Product not found')

@@ -4,6 +4,22 @@ export type MeasurementSettings = {
   system: MeasurementSystem
 }
 
+export type NutritionFocusPreset = 'ldl_support' | 'performance' | 'comprehensive' | 'custom'
+
+export type NutritionFocusMetric = {
+  id: string
+  label: string
+  unit: string
+  direction: 'min' | 'max' | 'info'
+}
+
+export type NutritionFocusSettings = {
+  preset: NutritionFocusPreset
+  metrics: string[]
+  presets: Array<{ id: NutritionFocusPreset; label: string; description: string }>
+  available_metrics: NutritionFocusMetric[]
+}
+
 export type GoalSettings = {
   target_weight_kg: number | null
   target_ldl_mg_dl: number | null
@@ -251,12 +267,12 @@ export type HaeAnalysis = {
 
 export type AiConfig = {
   models: {
-    meal_planner: { primary: string; fallback: string | null }
-    coach_agent: { primary: string; fallback: string | null }
-    food_extractor: { primary: string; fallback: string | null }
-    vision_classifier: { primary: string; fallback: string | null }
-    insight_narrator: { primary: string; fallback: string | null }
-    recipe_importer: { primary: string; fallback: string | null }
+    meal_planner: AiModelRoute
+    coach_agent: AiModelRoute
+    food_extractor: AiModelRoute
+    vision_classifier: AiModelRoute
+    insight_narrator: AiModelRoute
+    recipe_importer: AiModelRoute
   }
   endpoints: {
     local_ai_api_base: string | null
@@ -264,3 +280,11 @@ export type AiConfig = {
   }
 }
 
+export type AiModelRoute = {
+  primary: string
+  fallback: string | null
+  ready: boolean
+  active: string | null
+  using_fallback: boolean
+  issue: string | null
+}

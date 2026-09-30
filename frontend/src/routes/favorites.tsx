@@ -7,7 +7,7 @@ import { api } from '../lib/api'
 import { IngredientBuilder } from '../components/log-sheet/IngredientBuilder'
 import { getCurrentSlot } from '../lib/format'
 import type { DraftItem, Favorite, FavoriteItem } from '../components/log-sheet/types'
-import { toNutrients, scaleByRatio, sumNutrients } from '../lib/nutrients'
+import { toNutrients, scaleByRatio, scaleServingNutrients, sumNutrients } from '../lib/nutrients'
 import { ShareWithFamilyButton } from '../components/ShareWithFamilyButton'
 
 // Portion multipliers applied at log time so a saved favorite can be logged as
@@ -43,13 +43,20 @@ function portionChipStyle(active: boolean): CSSProperties {
 }
 
 function mapFavoriteItemToDraft(i: FavoriteItem): DraftItem {
+  const isServingBased = i.nutrition_basis === 'per_serving'
   return {
     name: i.food_name,
     brand: i.brand ?? undefined,
-    quantity: i.quantity_g,
-    unit: 'g',
-    estimated_weight_g: i.quantity_g,
+    quantity: isServingBased ? (i.serving_count ?? 1) : i.quantity_g,
+    unit: isServingBased ? 'serving' : 'g',
+    estimated_weight_g: i.quantity_g || 100,
     nutrients: toNutrients(i.nutrients),
+    nutrition_basis: i.nutrition_basis,
+    nutrients_per_serving: i.nutrients_per_serving ?? undefined,
+    serving_count: i.serving_count ?? undefined,
+    nutrient_source: i.nutrient_source,
+    source_id: i.source_id ?? undefined,
+    food_id: undefined,
   }
 }
 
@@ -59,6 +66,11 @@ function mapDraftItemToApi(item: DraftItem) {
     brand: item.brand ?? null,
     quantity_g: item.estimated_weight_g,
     nutrients: item.nutrients,
+    nutrition_basis: item.nutrition_basis ?? 'per_100g',
+    serving_count: item.nutrition_basis === 'per_serving' ? (item.serving_count ?? item.quantity) : null,
+    nutrients_per_serving: item.nutrition_basis === 'per_serving' ? (item.nutrients_per_serving ?? null) : null,
+    nutrient_source: item.nutrient_source ?? null,
+    source_id: item.source_id ?? item.food_id ?? null,
   }
 }
 
@@ -251,12 +263,25 @@ export default function FavoritesRoute() {
       const slot = getCurrentSlot()
       // Scale each item's weight and full nutrient profile by the chosen factor.
       // The favorite itself is untouched — only this logged copy is scaled.
-      const draftItems = fav.items.map(mapFavoriteItemToDraft).map((d) => ({
-        ...d,
-        quantity: d.quantity * factor,
-        estimated_weight_g: d.estimated_weight_g * factor,
-        nutrients: scaleByRatio(d.nutrients, factor),
-      }))
+      const draftItems = fav.items.map(mapFavoriteItemToDraft).map((d) => {
+        if (d.nutrition_basis === 'per_serving') {
+          const servings = (d.serving_count ?? d.quantity ?? 1) * factor
+          const baseNutrients = d.nutrients_per_serving ?? scaleByRatio(d.nutrients, 1 / Math.max(d.serving_count ?? d.quantity ?? 1, 0.25))
+          return {
+            ...d,
+            quantity: servings,
+            serving_count: servings,
+            estimated_weight_g: d.estimated_weight_g * factor,
+            nutrients: scaleServingNutrients(baseNutrients, servings),
+          }
+        }
+        return {
+          ...d,
+          quantity: d.quantity * factor,
+          estimated_weight_g: d.estimated_weight_g * factor,
+          nutrients: scaleByRatio(d.nutrients, factor),
+        }
+      })
       const displayName = factor === 1 ? fav.name : `${portionLabel(factor)} ${fav.name}`
       const nutrition = draftItems.reduce(
         (acc, cur) => {
@@ -339,6 +364,16 @@ export default function FavoritesRoute() {
     setItems((prev) => {
       const updated = [...prev]
       const item = { ...updated[index] }
+      if (item.nutrition_basis === 'per_serving') {
+        const servings = Math.max(0.25, newWeight)
+        const previousServings = Math.max(item.serving_count ?? item.quantity ?? 1, 0.25)
+        const baseNutrients = item.nutrients_per_serving ?? scaleByRatio(item.nutrients, 1 / previousServings)
+        item.serving_count = servings
+        item.quantity = servings
+        item.nutrients = scaleServingNutrients(baseNutrients, servings)
+        updated[index] = item
+        return updated
+      }
       const ratio = newWeight / item.estimated_weight_g
       item.estimated_weight_g = newWeight
       item.nutrients = scaleByRatio(item.nutrients, ratio)

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { emptyNutrients, toNutrients, scaleNutrients, NUTRIENT_KEYS } from '../lib/nutrients'
+import { emptyNutrients, toNutrients, scaleNutrients, scaleServingNutrients, NUTRIENT_KEYS } from '../lib/nutrients'
 
 describe('emptyNutrients', () => {
   it('returns an object with all NUTRIENT_KEYS set to 0', () => {
@@ -62,5 +62,14 @@ describe('scaleNutrients', () => {
     const result = scaleNutrients({ calories: 50 }, 100)
     expect(result.fat_g).toBe(0)
     expect(result.sodium_mg).toBe(0)
+  })
+})
+
+describe('scaleServingNutrients', () => {
+  it('scales a published menu serving without converting it to grams', () => {
+    const result = scaleServingNutrients({ calories: 635, protein_g: 20 }, 2)
+    expect(result.calories).toBe(1270)
+    expect(result.protein_g).toBe(40)
+    expect(result.fat_g).toBe(0)
   })
 })

@@ -37,8 +37,10 @@ export function AiConfigCard() {
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             {(Object.keys(ROLE_META) as Array<keyof typeof ROLE_META>).map((role) => {
               const meta = ROLE_META[role]
-              const primary = aiConfig.models[role]?.primary || '—'
-              const fallback = aiConfig.models[role]?.fallback
+              const route = aiConfig.models[role]
+              const primary = route?.primary || 'Not configured'
+              const fallback = route?.fallback
+              const ready = route?.ready ?? false
 
               return (
                 <div
@@ -98,14 +100,14 @@ export function AiConfigCard() {
                           textTransform: 'uppercase',
                           padding: '1px 4.5px',
                           borderRadius: 4,
-                          background: 'rgba(16, 185, 129, 0.08)',
-                          border: '1px solid rgba(16, 185, 129, 0.2)',
-                          color: '#10b981',
-                          display: 'inline-block',
-                          flexShrink: 0,
-                        }}
-                      >
-                        Active
+                        background: ready ? 'rgba(16, 185, 129, 0.08)' : 'rgba(251, 113, 133, 0.08)',
+                        border: ready ? '1px solid rgba(16, 185, 129, 0.2)' : '1px solid rgba(251, 113, 133, 0.2)',
+                        color: ready ? 'var(--fg-good)' : 'var(--fg-bad)',
+                        display: 'inline-block',
+                        flexShrink: 0,
+                      }}
+                    >
+                        {ready ? (route.using_fallback ? 'Fallback ready' : 'Ready') : 'Unavailable'}
                       </span>
                     </div>
 
@@ -132,6 +134,11 @@ export function AiConfigCard() {
                       )}
                     </div>
                   </div>
+                  {!ready && route?.issue && (
+                    <p style={{ margin: 0, fontSize: 11, lineHeight: 1.45, color: 'var(--fg-bad)' }}>
+                      {route.issue}
+                    </p>
+                  )}
                 </div>
               )
             })}

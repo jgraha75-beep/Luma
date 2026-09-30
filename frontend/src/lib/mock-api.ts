@@ -41,6 +41,69 @@ type PlanData = {
 let signedIn = true
 let measurementSystem: 'metric' | 'imperial' = 'metric'
 let aiPricingOverrides: Record<string, { input: number; output: number }> = {}
+let mockPlanDeleted = false
+type MockWhoopStatus = {
+  source: 'whoop'
+  separate_from_apple_health: true
+  quality: 'complete' | 'partial'
+  reasons: string[]
+  sync: {
+    status: 'complete' | 'partial'
+    pulled_at: string
+    window_start: string | null
+    window_end: string | null
+    collections: Record<string, unknown>
+  }
+  latest: Record<string, Record<string, unknown> | null>
+}
+
+let mockWhoopStatus: MockWhoopStatus = {
+  source: 'whoop' as const,
+  separate_from_apple_health: true as const,
+  quality: 'complete',
+  reasons: [] as string[],
+  sync: {
+    status: 'complete',
+    pulled_at: new Date().toISOString(),
+    window_start: null as string | null,
+    window_end: null as string | null,
+    collections: {},
+  },
+  latest: {
+    recovery: { external_id: 'mock-recovery', start: null, end: null, score_state: 'SCORED', pulled_at: new Date().toISOString(), recovery_score: 73, resting_heart_rate: 56, hrv_rmssd_milli: 48 },
+    sleep: { external_id: 'mock-sleep', start: null, end: null, score_state: 'SCORED', pulled_at: new Date().toISOString(), sleep_performance_percentage: 86 },
+    cycle: { external_id: 'mock-cycle', start: null, end: null, score_state: 'SCORED', pulled_at: new Date().toISOString(), strain: 9.4 },
+    workout: { external_id: 'mock-workout', start: null, end: null, score_state: 'SCORED', pulled_at: new Date().toISOString(), sport_name: 'Dance', strain: 7.2 },
+    body_measurement: { external_id: 'current', start: null, end: null, score_state: null, pulled_at: new Date().toISOString(), height_meter: 1.83, weight_kilogram: 86.2, max_heart_rate: 196 },
+  },
+}
+const MOCK_NUTRITION_FOCUS_METRICS = [
+  { id: 'calories', label: 'Calories', unit: 'kcal', direction: 'info' },
+  { id: 'protein_g', label: 'Protein', unit: 'g', direction: 'min' },
+  { id: 'carbohydrates_g', label: 'Carbohydrates', unit: 'g', direction: 'info' },
+  { id: 'fat_g', label: 'Total fat', unit: 'g', direction: 'info' },
+  { id: 'saturated_fat_g', label: 'Saturated fat', unit: 'g', direction: 'max' },
+  { id: 'soluble_fiber_g', label: 'Soluble fiber', unit: 'g', direction: 'min' },
+  { id: 'sodium_mg', label: 'Sodium', unit: 'mg', direction: 'max' },
+  { id: 'sugars_g', label: 'Total sugar', unit: 'g', direction: 'info' },
+  { id: 'added_sugars_g', label: 'Added sugar', unit: 'g', direction: 'max' },
+  { id: 'cholesterol_mg', label: 'Cholesterol', unit: 'mg', direction: 'max' },
+] as const
+const MOCK_NUTRITION_FOCUS_PRESETS = [
+  { id: 'ldl_support', label: 'LDL support', description: 'Prioritize cholesterol-related nutrition signals.' },
+  { id: 'performance', label: 'Performance macros', description: 'Prioritize calories, protein, carbohydrates, and total fat.' },
+  { id: 'comprehensive', label: 'All nutrition', description: 'Show every supported nutrition metric.' },
+  { id: 'custom', label: 'Custom', description: 'Choose the metrics that matter to you.' },
+] as const
+const MOCK_NUTRITION_FOCUS_PRESET_METRICS: Record<string, string[]> = {
+  ldl_support: ['calories', 'saturated_fat_g', 'soluble_fiber_g', 'sodium_mg', 'protein_g'],
+  performance: ['calories', 'protein_g', 'carbohydrates_g', 'fat_g'],
+  comprehensive: MOCK_NUTRITION_FOCUS_METRICS.map((item) => item.id),
+}
+let mockNutritionFocus = {
+  preset: 'ldl_support' as 'ldl_support' | 'performance' | 'comprehensive' | 'custom',
+  metrics: ['calories', 'saturated_fat_g', 'soluble_fiber_g', 'sodium_mg', 'protein_g'],
+}
 
 interface MockPref { kind: string; value: string }
 const mockPreferences: MockPref[] = []
@@ -70,6 +133,11 @@ interface FavoriteItem {
   brand: string | null
   quantity_g: number
   nutrients: Record<string, number>
+  nutrition_basis?: 'per_100g' | 'per_serving'
+  serving_count?: number | null
+  nutrients_per_serving?: Record<string, number> | null
+  nutrient_source?: string | null
+  source_id?: string | null
 }
 
 interface Favorite {
@@ -102,6 +170,27 @@ const MOCK_FOODS = [
   { id: 'fd-8', name: 'Blueberries', brand: null, serving_size_g: 100, nutrients_per_100g: { calories: 57, protein_g: 0.7, fat_g: 0.3, saturated_fat_g: 0, carbohydrates_g: 14, fiber_g: 2.4, soluble_fiber_g: 0.8, sodium_mg: 1 } },
   { id: 'fd-9', name: 'Whole-grain bread', brand: 'Dave\'s Killer Bread', serving_size_g: 45, nutrients_per_100g: { calories: 247, protein_g: 9, fat_g: 3.3, saturated_fat_g: 0.5, carbohydrates_g: 48, fiber_g: 5, soluble_fiber_g: 1.5, sodium_mg: 330 } },
   { id: 'fd-10', name: 'Spinach (raw)', brand: null, serving_size_g: 85, nutrients_per_100g: { calories: 23, protein_g: 2.9, fat_g: 0.4, saturated_fat_g: 0.1, carbohydrates_g: 3.6, fiber_g: 2.2, soluble_fiber_g: 0.9, sodium_mg: 79 } },
+]
+
+const MOCK_JAPAN_MENU = [
+  {
+    source: 'tabecal',
+    source_id: 'tabecal_mock_yoshinoya_gyudon_regular',
+    name: '牛丼（並盛）',
+    brand: '吉野家',
+    nutrition_basis: 'per_serving' as const,
+    nutrients: { calories: 635, protein_g: 20, fat_g: 23.4, carbohydrates_g: 89, salt_g: 2.7 },
+    metadata: { chain_slug: 'yoshinoya', genre: 'gyudon', category: '牛丼' },
+  },
+  {
+    source: 'tabecal',
+    source_id: 'tabecal_mock_familymart_chicken',
+    name: 'グリルチキン',
+    brand: 'ファミリーマート',
+    nutrition_basis: 'per_serving' as const,
+    nutrients: { calories: 198, protein_g: 22.1, fat_g: 10.2, carbohydrates_g: 3.4, salt_g: 1.4 },
+    metadata: { chain_slug: 'familymart', genre: 'convenience', category: 'チキン' },
+  },
 ]
 
 
@@ -296,6 +385,65 @@ export async function handleMockApiRequest(path: string, init?: RequestInit): Pr
     return { system: measurementSystem }
   }
 
+  if (method === 'GET' && pathname === '/whoop/status') {
+    requireAuth()
+    return mockWhoopStatus
+  }
+
+  if (method === 'POST' && pathname === '/whoop/import') {
+    requireAuth()
+    const body = parseBody(init)
+    const pulledAt = typeof body.pulled_at === 'string' ? body.pulled_at : new Date().toISOString()
+    mockWhoopStatus = {
+      ...mockWhoopStatus,
+      quality: (body.status === 'partial' ? 'partial' : 'complete') as 'complete' | 'partial',
+      reasons: body.status === 'partial' ? ['The imported WHOOP pull is partial'] : [],
+      sync: {
+        ...mockWhoopStatus.sync,
+        status: (body.status === 'partial' ? 'partial' : 'complete') as 'complete' | 'partial',
+        pulled_at: pulledAt,
+      },
+    }
+    return { sync_run_id: 'mock-whoop-sync', status: mockWhoopStatus.quality, observations: 0, collections: {} }
+  }
+
+  if (method === 'GET' && pathname === '/settings/nutrition-focus') {
+    requireAuth()
+    return {
+      ...mockNutritionFocus,
+      presets: MOCK_NUTRITION_FOCUS_PRESETS,
+      available_metrics: MOCK_NUTRITION_FOCUS_METRICS,
+    }
+  }
+
+  if (method === 'PUT' && pathname === '/settings/nutrition-focus') {
+    requireAuth()
+    const body = parseBody(init)
+    const preset = body?.preset
+    const metrics = body?.metrics
+    const validPresets = MOCK_NUTRITION_FOCUS_PRESETS.map((item) => item.id)
+    const validMetricIds: Set<string> = new Set(MOCK_NUTRITION_FOCUS_METRICS.map((item) => item.id))
+    if (typeof preset !== 'string' || !validPresets.includes(preset as typeof mockNutritionFocus.preset)) {
+      throw new MockApiError(422, 'Invalid nutrition focus preset')
+    }
+    if (!Array.isArray(metrics) || metrics.length < 1 || metrics.length > MOCK_NUTRITION_FOCUS_METRICS.length) {
+      throw new MockApiError(422, 'Choose between 1 and 10 nutrition metrics')
+    }
+    if (metrics.some((metric) => typeof metric !== 'string' || !validMetricIds.has(metric)) || new Set(metrics).size !== metrics.length) {
+      throw new MockApiError(422, 'Invalid or duplicate nutrition metric')
+    }
+    const expected = MOCK_NUTRITION_FOCUS_PRESET_METRICS[preset]
+    if (expected && JSON.stringify(metrics) !== JSON.stringify(expected)) {
+      throw new MockApiError(422, `Metrics must match the ${preset} preset`)
+    }
+    mockNutritionFocus = { preset: preset as typeof mockNutritionFocus.preset, metrics: metrics as string[] }
+    return {
+      ...mockNutritionFocus,
+      presets: MOCK_NUTRITION_FOCUS_PRESETS,
+      available_metrics: MOCK_NUTRITION_FOCUS_METRICS,
+    }
+  }
+
   if (method === 'GET' && pathname === '/settings/llm-metrics') {
     requireAuth()
     return {
@@ -364,7 +512,31 @@ export async function handleMockApiRequest(path: string, init?: RequestInit): Pr
 
   if (method === 'GET' && pathname === '/today') {
     requireAuth()
-    return createMockTodayData()
+    const data = createMockTodayData()
+    const baseValues: Record<string, { logged: number; target: number | null }> = {
+      calories: { logged: data.adherence_today.calories.logged ?? 0, target: data.adherence_today.calories.target },
+      protein_g: { logged: data.adherence_today.protein_g.logged ?? 0, target: data.adherence_today.protein_g.target },
+      carbohydrates_g: { logged: 226, target: null },
+      fat_g: { logged: 63, target: null },
+      saturated_fat_g: { logged: data.adherence_today.sat_fat_g.logged ?? 0, target: data.adherence_today.sat_fat_g.target },
+      soluble_fiber_g: { logged: data.adherence_today.soluble_fiber_g.logged ?? 0, target: data.adherence_today.soluble_fiber_g.target },
+      sodium_mg: { logged: data.adherence_today.sodium_mg.logged ?? 0, target: data.adherence_today.sodium_mg.target },
+      sugars_g: { logged: 48, target: null },
+      added_sugars_g: { logged: 18, target: null },
+      cholesterol_mg: { logged: 210, target: null },
+    }
+    data.nutrition_focus = {
+      preset: mockNutritionFocus.preset,
+      metrics: mockNutritionFocus.metrics,
+      available_metrics: [...MOCK_NUTRITION_FOCUS_METRICS],
+    }
+    data.nutrition_adherence = Object.fromEntries(
+      Object.entries(baseValues).map(([id, value]) => [
+        id,
+        { ...value, pct: value.target ? Math.round((value.logged / value.target) * 1000) / 10 : null },
+      ])
+    )
+    return data
   }
 
   if (method === 'GET' && pathname.startsWith('/trends/')) {
@@ -380,13 +552,21 @@ export async function handleMockApiRequest(path: string, init?: RequestInit): Pr
 
   if (method === 'GET' && pathname === '/plan/current') {
     requireAuth()
+    if (mockPlanDeleted) throw new MockApiError(404, 'No active meal plan found')
     return mockPlan
   }
 
   if (method === 'POST' && pathname === '/plan/generate') {
     requireAuth()
+    mockPlanDeleted = false
     mockPlan = createMockPlan()
     return mockPlan
+  }
+
+  if (method === 'DELETE' && /^\/plan\/[^/]+$/.test(pathname)) {
+    requireAuth()
+    mockPlanDeleted = true
+    return { status: 'deleted', plan_id: pathname.split('/')[2] }
   }
 
   if (method === 'GET' && /^\/plan\/[^/]+\/shopping-list$/.test(pathname)) {
@@ -400,6 +580,14 @@ export async function handleMockApiRequest(path: string, init?: RequestInit): Pr
     if (!q.trim()) return MOCK_FOODS.slice(0, 8)
     const lq = q.toLowerCase()
     return MOCK_FOODS.filter((f) => f.name.toLowerCase().includes(lq) || (f.brand ?? '').toLowerCase().includes(lq))
+  }
+
+  if (method === 'GET' && pathname === '/foods/japan/search') {
+    requireAuth()
+    const q = getQueryParam(path, 'q') ?? ''
+    if (!q.trim()) return []
+    const lq = q.toLowerCase()
+    return MOCK_JAPAN_MENU.filter((f) => f.name.toLowerCase().includes(lq) || (f.brand ?? '').toLowerCase().includes(lq))
   }
 
   if (method === 'POST' && /^\/plan\/slot\/[^/]+\/replace$/.test(pathname)) {

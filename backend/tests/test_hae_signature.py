@@ -78,6 +78,28 @@ def test_correct_app_secret_accepted():
     assert resp.status_code == 200
 
 
+def test_bearer_app_secret_accepted_for_hae_compatibility():
+    """HAE supports Authorization headers; accept the same static app secret there."""
+    fake_user = MagicMock()
+    fake_user.id = uuid4()
+    fake_user.data_source = "apple_health"
+
+    app = _make_ingest_app(fake_user)
+
+    with patch("luma.api.ingest._check_replay", new=AsyncMock()):
+        with patch("luma.api.ingest.hae_metrics_tracker") as mock_tracker:
+            mock_tracker.record_ingest = AsyncMock()
+            with patch("luma.api.ingest.settings") as mock_settings:
+                mock_settings.hae_shared_secret = APP_SECRET
+                with TestClient(app, raise_server_exceptions=False) as client:
+                    resp = _post_hae(
+                        client,
+                        headers={"Authorization": f"Bearer {APP_SECRET}"},
+                    )
+
+    assert resp.status_code == 200
+
+
 def test_missing_app_secret_header_returns_401():
     fake_user = MagicMock()
     fake_user.id = uuid4()
@@ -104,6 +126,58 @@ def test_wrong_app_secret_returns_401():
             resp = _post_hae(client, headers={"X-HAE-Signature": "wrong-secret"})
 
     assert resp.status_code == 401
+
+
+def test_wrong_app_secret_is_recorded_for_known_import_token():
+    fake_user = MagicMock()
+    fake_user.id = uuid4()
+    fake_user.data_source = "apple_health"
+
+    app = _make_ingest_app(fake_user)
+
+    with patch("luma.api.ingest.hae_metrics_tracker") as mock_tracker:
+        mock_tracker.record_ingest = AsyncMock()
+        with patch("luma.api.ingest.settings") as mock_settings:
+            mock_settings.hae_shared_secret = APP_SECRET
+            with TestClient(app, raise_server_exceptions=False) as client:
+                resp = _post_hae(
+                    client,
+                    headers={"X-HAE-Signature": "wrong-secret"},
+                )
+
+    assert resp.status_code == 401
+    mock_tracker.record_ingest.assert_awaited_once_with(
+        user_id=fake_user.id,
+        rows_inserted=0,
+        error="Invalid app secret",
+    )
+
+
+def test_invalid_json_is_recorded_for_known_user():
+    fake_user = MagicMock()
+    fake_user.id = uuid4()
+    fake_user.data_source = "apple_health"
+
+    app = _make_ingest_app(fake_user)
+
+    with patch("luma.api.ingest._check_replay", new=AsyncMock()):
+        with patch("luma.api.ingest.hae_metrics_tracker") as mock_tracker:
+            mock_tracker.record_ingest = AsyncMock()
+            with patch("luma.api.ingest.settings") as mock_settings:
+                mock_settings.hae_shared_secret = ""
+                with TestClient(app, raise_server_exceptions=False) as client:
+                    resp = client.post(
+                        f"/api/v1/ingest/hae/{uuid4()}",
+                        content=b"not-json",
+                        headers={"Content-Type": "application/json"},
+                    )
+
+    assert resp.status_code == 422
+    mock_tracker.record_ingest.assert_awaited_once_with(
+        user_id=fake_user.id,
+        rows_inserted=0,
+        error="Invalid JSON",
+    )
 
 
 def test_unknown_import_token_returns_401():

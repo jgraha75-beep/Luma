@@ -10,7 +10,7 @@ from sqlalchemy import text as sa_text
 
 from luma.db.models import Food
 from luma.deps import CurrentUser, DbDep
-from luma.services import off_client, usda_client
+from luma.services import off_client, tabecal_client, usda_client
 from luma.services.food_flags import compute_threshold_flags, merge_flags
 from luma.services.food_search import (
     LOCAL_THRESHOLD,
@@ -55,6 +55,28 @@ class FoodResponse(BaseModel):
     created_by: UUID | None = None
 
     model_config = {"from_attributes": True}
+
+
+class JapanNutritionResponse(BaseModel):
+    calories: float | None = None
+    protein_g: float | None = None
+    fat_g: float | None = None
+    saturated_fat_g: float | None = None
+    carbohydrates_g: float | None = None
+    sugars_g: float | None = None
+    fiber_g: float | None = None
+    sodium_mg: float | None = None
+
+
+class JapanFoodResponse(BaseModel):
+    source: str
+    source_id: str
+    name: str
+    brand: str | None = None
+    serving_size_g: float | None = None
+    nutrition_basis: str
+    nutrients: JapanNutritionResponse
+    metadata: dict[str, object]
 
 
 @router.get("/search", response_model=list[FoodResponse])
@@ -171,6 +193,18 @@ async def lookup_barcode_food(
     await db.commit()
     await db.refresh(food)
     return food
+
+
+@router.get("/japan/search", response_model=list[JapanFoodResponse])
+async def search_japan_foods(
+    current_user: CurrentUser,
+    q: str = Query(..., min_length=1, max_length=120),
+    limit: int = Query(default=20, ge=1, le=50),
+    offset: int = Query(default=0, ge=0, le=10000),
+) -> list[dict[str, object]]:
+    """Return Japanese chain menu items with an explicit per-serving basis."""
+    del current_user  # Authentication protects the provider-backed catalog.
+    return await tabecal_client.search_items(q.strip(), limit=limit, offset=offset)
 
 
 @router.get("/recent", response_model=list[FoodResponse])

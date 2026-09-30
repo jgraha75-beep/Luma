@@ -8,6 +8,8 @@ interface FeatureConfig {
   provider: string
   provider_label: string
   is_cloud: boolean
+  ready: boolean
+  issue: string | null
 }
 
 interface AiProvidersData {
@@ -15,13 +17,15 @@ interface AiProvidersData {
 }
 
 const PROVIDER_META: Record<string, { color: string; dotShadow: string }> = {
-  anthropic: { color: 'var(--aurora-violet)', dotShadow: '0 0 8px var(--aurora-violet)' },
-  gemini:    { color: 'var(--sky-400)',        dotShadow: '0 0 8px var(--sky-400)' },
-  local:     { color: 'var(--sun-400)',        dotShadow: '0 0 8px var(--sun-400)' },
+  anthropic: { color: 'var(--aurora-violet)', dotShadow: 'none' },
+  gemini:    { color: 'var(--sky-400)',        dotShadow: 'none' },
+  local:     { color: 'var(--sun-400)',        dotShadow: 'none' },
+  unconfigured: { color: 'var(--fg-quiet)',    dotShadow: 'none' },
   cloud:     { color: 'var(--fg-secondary)',   dotShadow: 'none' },
 }
 
-function providerDescription(provider: string, isCloud: boolean): string {
+function providerDescription(provider: string, isCloud: boolean, ready: boolean, issue: string | null): string {
+  if (!ready) return issue || 'AI is unavailable for these features.'
   if (!isCloud) return 'Processed on this server — your data never leaves.'
   if (provider === 'anthropic') return 'Sent to Anthropic\'s servers for processing.'
   if (provider === 'gemini') return 'Sent to Google\'s servers for processing.'
@@ -82,15 +86,19 @@ export function AiDataRoutingCard() {
                   <span style={{
                     fontSize: 10, padding: '2px 6px',
                     borderRadius: 4,
-                    background: config.is_cloud
+                    background: !config.ready
+                      ? 'rgba(255,255,255,0.05)'
+                      : config.is_cloud
                       ? 'rgba(251, 113, 133, 0.12)'
                       : 'rgba(16, 185, 129, 0.12)',
-                    color: config.is_cloud ? 'var(--fg-bad)' : 'var(--fg-good)',
+                    color: !config.ready
+                      ? 'var(--fg-quiet)'
+                      : config.is_cloud ? 'var(--fg-bad)' : 'var(--fg-good)',
                     fontWeight: 500,
                     textTransform: 'uppercase',
                     letterSpacing: '0.08em',
                   }}>
-                    {config.is_cloud ? 'Cloud' : 'Local'}
+                    {!config.ready ? 'Unavailable' : config.is_cloud ? 'Cloud' : 'Local'}
                   </span>
                 </div>
 
@@ -119,7 +127,7 @@ export function AiDataRoutingCard() {
                     ))}
                   </div>
                   <p style={{ fontSize: 12, color: 'var(--fg-quiet)', margin: 0 }}>
-                    {providerDescription(config.provider, config.is_cloud)}
+                    {providerDescription(config.provider, config.is_cloud, config.ready, config.issue)}
                   </p>
                 </div>
               </div>

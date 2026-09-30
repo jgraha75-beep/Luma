@@ -170,6 +170,12 @@ export interface TodayData {
     sodium_mg: { logged: number | null; target: number | null; pct: number | null }
     protein_g: { logged: number | null; target: number | null; pct: number | null }
   }
+  nutrition_focus?: {
+    preset: 'ldl_support' | 'performance' | 'comprehensive' | 'custom'
+    metrics: string[]
+    available_metrics: Array<{ id: string; label: string; unit: string; direction: 'min' | 'max' | 'info' }>
+  }
+  nutrition_adherence?: Record<string, { logged: number; target: number | null; pct: number | null }>
   biometrics_latest: {
     hrv_ms: number | null
     rhr_bpm: number | null

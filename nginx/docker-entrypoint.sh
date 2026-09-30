@@ -45,7 +45,12 @@ else
 fi
 
 cat > "$PROXY_INC" << EOF
-proxy_pass         http://api:8000;
+# Resolve the Docker service name at request time.  Docker can give the API a
+# new address after a recreate; a startup-only lookup leaves nginx pointing at
+# the former container and turns every API request into a 502.
+resolver           127.0.0.11 valid=10s ipv6=off;
+set                \$luma_api_upstream http://api:8000;
+proxy_pass         \$luma_api_upstream;
 proxy_set_header   Host \$host;
 proxy_set_header   X-Real-IP \$remote_addr;
 proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;

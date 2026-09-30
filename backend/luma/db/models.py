@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import (
     ARRAY,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Double,
@@ -317,6 +318,49 @@ class Biometric(Base):
     source_meta: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
 
+class WhoopSyncRun(Base):
+    """Audit record for one read-only WHOOP collection pull."""
+
+    __tablename__ = "whoop_sync_runs"
+    __table_args__ = (Index("ix_whoop_sync_runs_user_pulled", "user_id", "pulled_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False,
+    )
+    pulled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    window_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    collections: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+
+
+class WhoopObservation(Base):
+    """WHOOP-native values; deliberately not part of Apple Health biometrics."""
+
+    __tablename__ = "whoop_observations"
+    __table_args__ = (
+        UniqueConstraint("user_id", "kind", "external_id", name="uq_whoop_observation_source_record"),
+        Index("ix_whoop_observations_user_kind_time", "user_id", "kind", "start_ts"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False,
+    )
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    external_id: Mapped[str] = mapped_column(Text, nullable=False)
+    start_ts: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    end_ts: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    score_state: Mapped[str | None] = mapped_column(Text)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pulled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class Favorite(Base):
     __tablename__ = "favorites"
     __table_args__ = (
@@ -338,6 +382,14 @@ class FavoriteItem(Base):
     __tablename__ = "favorite_items"
     __table_args__ = (
         Index("ix_favorite_items_fav", "favorite_id", "sort_order"),
+        CheckConstraint(
+            "nutrition_basis IN ('per_100g', 'per_serving')",
+            name="ck_favorite_items_nutrition_basis",
+        ),
+        CheckConstraint(
+            "serving_count IS NULL OR serving_count > 0",
+            name="ck_favorite_items_serving_count_positive",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -347,6 +399,11 @@ class FavoriteItem(Base):
     brand: Mapped[str | None] = mapped_column(Text)
     quantity_g: Mapped[float] = mapped_column(Float, nullable=False)
     nutrients: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    nutrition_basis: Mapped[str] = mapped_column(Text, nullable=False, default="per_100g", server_default="per_100g")
+    serving_count: Mapped[float | None] = mapped_column(Float)
+    nutrients_per_serving: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    nutrient_source: Mapped[str | None] = mapped_column(Text)
+    source_id: Mapped[str | None] = mapped_column(Text)
 
     favorite = relationship("Favorite", back_populates="items")
 

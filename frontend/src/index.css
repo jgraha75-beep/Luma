@@ -2253,6 +2253,34 @@ input[type="search"]::-webkit-search-results-decoration {
   padding: 7px 12px;
 }
 
+.plan-ai-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--glass-edge);
+  border-radius: 8px;
+  background: var(--glass-1);
+  color: var(--fg-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.plan-ai-status svg {
+  flex-shrink: 0;
+  color: var(--warn);
+}
+
+.plan-ai-status-error {
+  border-color: rgba(251, 113, 133, 0.24);
+  color: var(--fg-bad);
+}
+
+.plan-ai-status-error svg {
+  color: var(--fg-bad);
+}
+
 .plan-view-toggle {
   display: flex;
   padding: 4px;

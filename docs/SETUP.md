@@ -103,6 +103,7 @@ On first boot, the login screen will switch into setup mode if no users exist ye
 | Variable | Description |
 |---|---|
 | `ANTHROPIC_API_KEY` | Required for `anthropic/<model>` routes (meal planner, insight narrator) |
+| `ANTHROPIC_WORKSPACE_ID` | Workspace ID sent with Anthropic identity-linked keys; copy the `wrkspc_...` value from Anthropic Console → Settings → Workspaces |
 | `GEMINI_API_KEY` | Required for `gemini/<model>` routes (food extractor, coach) |
 
 ### LLM Model Routing
@@ -245,17 +246,20 @@ Luma receives Apple Health data via the [Health Auto Export](https://www.healthy
 
 | Setting | Value |
 |---|---|
-| **URL** | `https://<your-domain>/api/ingest/hae` |
+| **Automation type** | REST API |
+| **URL** | Copy the per-user URL from **Luma → Settings → Data Sources**. It ends in `/api/v1/ingest/hae/<import-token>`. |
 | **Method** | POST |
-| **Authentication** | Bearer Token → paste your `HAE_SHARED_SECRET` value |
-| **Data format** | JSON |
-| **Export type** | Object per metric (Metrics format) |
-| **Date range** | Last Export (incremental — sends only new data since the last successful sync) |
+| **Authentication** | Add custom header `X-HAE-Signature` and paste the app secret from **Luma → Settings → Data Sources**. |
+| **Data type** | Health Metrics |
+| **Export format** | JSON |
+| **Export version** | Version 2 |
+| **Date range** | Since Last Sync (incremental — sends only new data since the last successful sync) |
+| **Summarize data** | On, grouped daily |
 | **Automation frequency** | Every 1 hour |
-| **Split requests** | Off (single request) |
+| **Batch requests** | On for initial or large exports |
 | **Timeout** | 30 seconds |
 
-> **Date range note:** Do not use "Today" or a fixed window. "Last Export" keeps payloads small and avoids hitting the 10-minute replay-detection window that deduplicates back-to-back uploads.
+> **First-test note:** Run Manual Export from inside the REST API automation with **Previous 7 Days**. Keep Tailscale connected and keep the iPhone unlocked or connected through iPhone Mirroring. After the first successful upload, switch to **Since Last Sync**.
 
 ### Metrics to enable
 
@@ -327,9 +331,9 @@ Only enable the metrics listed below. Unknown metrics are silently skipped, but 
 ### Endpoint technical reference
 
 ```http
-POST https://<your-domain>/api/ingest/hae
+POST https://<your-domain>/api/v1/ingest/hae/<import-token>
 Content-Type: application/json
-Authorization: Bearer <HAE_SHARED_SECRET>
+X-HAE-Signature: <HAE_SHARED_SECRET>
 ```
 
 HAE sends a metrics array. Each element has a `name`, `units`, and `data` array of timestamped readings:
@@ -374,18 +378,18 @@ Note that `heart_rate` uses `Min`/`Avg`/`Max` fields instead of `qty`. All other
 | Status | Meaning |
 |---|---|
 | `200 OK` | Accepted. Body: `{"status": "ok", "rows_inserted": <n>}` |
-| `401 Unauthorized` | Missing or invalid Bearer token |
+| `401 Unauthorized` | Missing/invalid import token or app secret |
 | `409 Conflict` | Duplicate request (identical body received within 10 minutes) |
 
-### Advanced: HMAC-SHA256 signatures
+### Authentication compatibility
 
-If you prefer body-integrity protection over a static Bearer token, send an `X-Hae-Signature` header instead of `Authorization`:
+The preferred Health Auto Export configuration is the custom header shown above. Existing automations may send the same app secret as a Bearer token instead:
 
 ```
-X-Hae-Signature: <lowercase-hex-of-HMAC-SHA256(HAE_SHARED_SECRET, request-body-bytes)>
+Authorization: Bearer <HAE_SHARED_SECRET>
 ```
 
-HAE does not natively generate HMAC signatures, so this path is only useful for custom integrations or scripts.
+Luma accepts either header. `X-HAE-Signature` is a historical name for a static shared-secret header; it is not a body HMAC.
 
 ---
 

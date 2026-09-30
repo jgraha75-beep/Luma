@@ -201,6 +201,20 @@ async def _upsert_context(user_id: str, ctx: dict, db: AsyncSession) -> None:
 async def _build_context(user_id: str, db: AsyncSession) -> dict:
     ctx: dict = {}
 
+    # Nutrition focus is a user preference, not a clinical goal. Keep it in the
+    # coach context so the agent can emphasize what this person asked to track
+    # without inventing targets for informational metrics.
+    focus_row = await db.execute(
+        text("SELECT value FROM preferences WHERE user_id = :uid AND kind = 'nutrition_focus'"),
+        {"uid": user_id},
+    )
+    from luma.services.nutrition_focus import METRIC_BY_ID, focus_from_preference
+    focus = focus_from_preference(focus_row.scalar_one_or_none())
+    ctx["nutrition_focus"] = {
+        "preset": focus.preset,
+        "metrics": [METRIC_BY_ID[metric_id].model_dump() for metric_id in focus.metrics],
+    }
+
     # Demographic profile — used by meal planner + coach for personalised recommendations
     from datetime import date
     profile_row = await db.execute(
@@ -246,22 +260,30 @@ async def _build_context(user_id: str, db: AsyncSession) -> dict:
     nutr_row = await db.execute(
         text("""
             SELECT
-                AVG((nutrition->>'calories')::float)        AS avg_cal,
-                AVG((nutrition->>'saturated_fat_g')::float) AS avg_sat,
-                AVG((nutrition->>'soluble_fiber_g')::float) AS avg_fiber,
-                AVG((nutrition->>'protein_g')::float)       AS avg_protein
+                AVG((nutrition->>'calories')::float) AS calories,
+                AVG((nutrition->>'protein_g')::float) AS protein_g,
+                AVG((nutrition->>'carbohydrates_g')::float) AS carbohydrates_g,
+                AVG((nutrition->>'fat_g')::float) AS fat_g,
+                AVG((nutrition->>'saturated_fat_g')::float) AS saturated_fat_g,
+                AVG((nutrition->>'soluble_fiber_g')::float) AS soluble_fiber_g,
+                AVG((nutrition->>'sodium_mg')::float) AS sodium_mg,
+                AVG((nutrition->>'sugars_g')::float) AS sugars_g,
+                AVG((nutrition->>'added_sugars_g')::float) AS added_sugars_g,
+                AVG((nutrition->>'cholesterol_mg')::float) AS cholesterol_mg
             FROM meal_events
             WHERE user_id = :uid AND ts >= now() - INTERVAL '7 days'
         """),
         {"uid": user_id},
     )
     nr = nutr_row.fetchone()
-    if nr and nr.avg_cal is not None:
+    if nr and nr.calories is not None:
         ctx["nutrition_7d_avg"] = {
-            "calories": round(nr.avg_cal, 0) if nr.avg_cal else None,
-            "sat_fat_g": round(nr.avg_sat, 1) if nr.avg_sat else None,
-            "fiber_g": round(nr.avg_fiber, 1) if nr.avg_fiber else None,
-            "protein_g": round(nr.avg_protein, 1) if nr.avg_protein else None,
+            key: round(getattr(nr, key), 0 if key == "calories" else 1)
+            if getattr(nr, key) is not None else None
+            for key in (
+                "calories", "protein_g", "carbohydrates_g", "fat_g", "saturated_fat_g",
+                "soluble_fiber_g", "sodium_mg", "sugars_g", "added_sugars_g", "cholesterol_mg",
+            )
         }
 
     # Latest biometrics
@@ -373,14 +395,28 @@ def format_context_for_prompt(
             lines.append("**Goals:** " + ", ".join(parts))
 
     if show_nutrition:
+        if focus := ctx.get("nutrition_focus"):
+            labels = ", ".join(metric["label"] for metric in focus["metrics"])
+            lines.append(f"**Nutrition focus ({focus['preset']}):** {labels}")
         if nutr := ctx.get("nutrition_7d_avg"):
+            labels = {
+                "calories": ("kcal", 0),
+                "protein_g": ("g protein", 1),
+                "carbohydrates_g": ("g carbs", 1),
+                "fat_g": ("g fat", 1),
+                "saturated_fat_g": ("g sat fat", 1),
+                "soluble_fiber_g": ("g soluble fiber", 1),
+                "sodium_mg": ("mg sodium", 0),
+                "sugars_g": ("g sugar", 1),
+                "added_sugars_g": ("g added sugar", 1),
+                "cholesterol_mg": ("mg cholesterol", 0),
+            }
+            focus_ids = {metric["id"] for metric in (focus or {}).get("metrics", [])}
             parts = []
-            if nutr.get("calories"):
-                parts.append(f"{int(nutr['calories'])} kcal avg")
-            if nutr.get("sat_fat_g"):
-                parts.append(f"{nutr['sat_fat_g']}g sat fat avg")
-            if nutr.get("fiber_g"):
-                parts.append(f"{nutr['fiber_g']}g fiber avg")
+            for key, (unit, digits) in labels.items():
+                if key in focus_ids and nutr.get(key) is not None:
+                    value = int(nutr[key]) if digits == 0 else nutr[key]
+                    parts.append(f"{value} {unit} avg")
             if parts:
                 lines.append("**Last 7d nutrition:** " + ", ".join(parts))
 

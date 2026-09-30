@@ -77,6 +77,40 @@ async def list_plan_weeks(db: DbDep, current_user: CurrentUser) -> dict:
     return {"weeks": [{"week_start": r.week_start.isoformat(), "status": r.status} for r in rows]}
 
 
+@router.delete("/{plan_id}")
+async def delete_plan(plan_id: str, db: DbDep, current_user: CurrentUser) -> dict:
+    """Permanently remove one of the current user's generated weekly plans.
+
+    Meal logs are personal history, so detach their optional slot reference
+    before the plan's cascading slot delete. Shopping items and slots are then
+    removed with the plan while unrelated users' plans remain inaccessible.
+    """
+    plan_uuid = _parse_uuid(plan_id, "plan UUID")
+    result = await db.execute(
+        select(MealPlan).where(
+            MealPlan.id == plan_uuid,
+            MealPlan.user_id == current_user.id,
+        )
+    )
+    plan = result.scalar_one_or_none()
+    if not plan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meal plan not found")
+
+    slot_ids = (
+        await db.execute(select(MealPlanSlot.id).where(MealPlanSlot.plan_id == plan.id))
+    ).scalars().all()
+    if slot_ids:
+        await db.execute(
+            update(MealEvent)
+            .where(MealEvent.plan_slot_id.in_(slot_ids))
+            .values(plan_slot_id=None)
+        )
+
+    await db.delete(plan)
+    await db.commit()
+    return {"status": "deleted", "plan_id": str(plan.id)}
+
+
 @router.get("/week/{week_start_str}")
 async def get_plan_by_week(week_start_str: str, db: DbDep, current_user: CurrentUser) -> dict:
     try:

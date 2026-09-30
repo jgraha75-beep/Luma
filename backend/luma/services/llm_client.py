@@ -15,6 +15,91 @@ from luma.services.llm_metrics import tracker as llm_metrics_tracker
 logger = logging.getLogger(__name__)
 
 
+class LLMConfigurationError(RuntimeError):
+    pass
+
+
+def get_model_route_status(model_alias: str) -> dict[str, Any]:
+    alias = model_alias.strip()
+    if not alias:
+        return {
+            "model": "",
+            "provider": "unconfigured",
+            "ready": False,
+            "issue": "No model is configured.",
+        }
+
+    if alias.startswith("local/") or ("/" not in alias and settings.local_ai_api_base):
+        ready = bool(settings.local_ai_api_base.strip())
+        return {
+            "model": alias,
+            "provider": "local",
+            "ready": ready,
+            "issue": None if ready else "Local AI endpoint is missing.",
+        }
+
+    if alias.startswith("gemini/"):
+        ready = bool(settings.gemini_api_key.strip())
+        return {
+            "model": alias,
+            "provider": "gemini",
+            "ready": ready,
+            "issue": None if ready else "Gemini API key is missing.",
+        }
+
+    if alias.startswith("anthropic/"):
+        has_api_key = bool(settings.anthropic_api_key.strip())
+        has_workspace_id = bool(settings.anthropic_workspace_id.strip())
+        ready = has_api_key and has_workspace_id
+        if not has_api_key:
+            issue = "Anthropic API key is missing."
+        elif not has_workspace_id:
+            issue = "Anthropic workspace ID is missing."
+        else:
+            issue = None
+        return {
+            "model": alias,
+            "provider": "anthropic",
+            "ready": ready,
+            "issue": issue,
+        }
+
+    if "/" not in alias:
+        return {
+            "model": alias,
+            "provider": "unconfigured",
+            "ready": False,
+            "issue": "Model provider prefix is missing.",
+        }
+
+    provider = alias.split("/", 1)[0]
+    return {
+        "model": alias,
+        "provider": provider,
+        "ready": False,
+        "issue": f"Provider {provider!r} is not configured by Luma.",
+    }
+
+
+def get_role_route_status(primary_model: str, fallback_model: str) -> dict[str, Any]:
+    primary = get_model_route_status(primary_model)
+    fallback = get_model_route_status(fallback_model) if fallback_model.strip() else None
+    active_status = primary if primary["ready"] else fallback if fallback and fallback["ready"] else None
+
+    issues = [primary["issue"]]
+    if fallback is not None:
+        issues.append(fallback["issue"])
+
+    return {
+        "ready": active_status is not None,
+        "active": active_status["model"] if active_status else None,
+        "using_fallback": bool(active_status is fallback and fallback is not None),
+        "issue": None if active_status else " ".join(issue for issue in issues if issue),
+        "primary_status": primary,
+        "fallback_status": fallback,
+    }
+
+
 def _local_openai_route(model: str) -> dict[str, Any]:
     """Route through an OpenAI-compatible local gateway (LocalAI/Ollama/etc.)."""
     return {
@@ -50,6 +135,13 @@ def build_litellm_target(model_name: str) -> dict[str, Any]:
 
     if model_name.startswith("gemini/"):
         return {"model": model_name, "api_key": settings.gemini_api_key or None}
+
+    if model_name.startswith("anthropic/"):
+        target: dict[str, Any] = {"model": model_name}
+        workspace_id = settings.anthropic_workspace_id.strip()
+        if workspace_id:
+            target["extra_headers"] = {"anthropic-workspace-id": workspace_id}
+        return target
 
     if "/" in model_name:
         # Explicit provider prefix — let LiteLLM route natively.
@@ -276,9 +368,31 @@ async def call_llm(
         )
     """
     kwargs = _inject_current_datetime(kwargs)
+    route_status = get_role_route_status(primary_model, fallback_model)
+    primary_status = route_status["primary_status"]
+    fallback_status = route_status["fallback_status"]
+
+    if not route_status["ready"]:
+        raise LLMConfigurationError(route_status["issue"] or "No usable AI route is configured.")
+
+    if not primary_status["ready"] and fallback_status and fallback_status["ready"]:
+        logger.warning(
+            "LLM primary unavailable; using configured fallback",
+            extra={"llm_model": primary_model, "llm_fallback_model": fallback_model},
+        )
+        fallback = build_litellm_target(fallback_model)
+        return await _call_target(
+            fallback,
+            model_alias=fallback_model,
+            attempt="fallback",
+            trigger=trigger,
+            user_id=user_id,
+            **kwargs,
+        )
+
     primary = build_litellm_target(primary_model)
 
-    if fallback_model:
+    if fallback_model and fallback_status and fallback_status["ready"]:
         fallback = build_litellm_target(fallback_model)
         logger.debug("LLM call configured with fallback", extra={"llm_model": primary_model, "llm_fallback_model": fallback_model})
         try:

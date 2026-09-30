@@ -27,6 +27,7 @@ from luma.api import (
     trends,
     user_settings,
     water,
+    whoop,
 )
 from luma.config import settings
 from luma.middleware import CSRFMiddleware
@@ -154,6 +155,7 @@ app.include_router(notifications.router, prefix=f"{API_PREFIX}/notifications", t
 app.include_router(family.router, prefix=f"{API_PREFIX}/family", tags=["family"])
 app.include_router(health.router, prefix=API_PREFIX, tags=["health"])
 app.include_router(water.router, prefix=f"{API_PREFIX}/water", tags=["water"])
+app.include_router(whoop.router, prefix=API_PREFIX, tags=["whoop"])
 
 
 @app.get("/health")

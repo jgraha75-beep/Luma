@@ -26,16 +26,34 @@ def _get_redis():
 
 
 def _verify_app_secret(request: Request) -> None:
-    """Validate X-HAE-Signature header against the app-level shared secret.
+    """Validate the app-level shared secret from a supported HAE header.
 
     Skipped when hae_shared_secret is not configured (dev / legacy setups).
+    Health Auto Export supports both custom headers and Authorization headers,
+    so accept the preferred X-HAE-Signature value and the equivalent Bearer
+    token form.  Both carry the same static secret; neither is a body HMAC.
     Uses constant-time comparison to prevent timing attacks.
     """
     if not settings.hae_shared_secret:
         return
     header_value = request.headers.get("X-HAE-Signature", "")
-    if not hmac.compare_digest(header_value, settings.hae_shared_secret):
+    authorization = request.headers.get("Authorization", "")
+    bearer_value = authorization[7:] if authorization.lower().startswith("bearer ") else ""
+    if not (
+        hmac.compare_digest(header_value, settings.hae_shared_secret)
+        or hmac.compare_digest(bearer_value, settings.hae_shared_secret)
+    ):
+        logger.warning("Rejected HAE request: invalid app secret")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid app secret")
+
+
+async def _record_http_failure(user_id: UUID | str, exc: HTTPException) -> None:
+    detail = exc.detail if isinstance(exc.detail, str) else "Ingestion request failed"
+    try:
+        await hae_metrics_tracker.record_ingest(user_id=user_id, rows_inserted=0, error=detail)
+    except Exception as metrics_exc:
+        # Diagnostics must never replace the original HTTP response with a 500.
+        logger.warning("Failed to record HAE HTTP failure: %s", metrics_exc)
 
 
 async def _check_replay(replay_key: str) -> None:
@@ -63,15 +81,28 @@ async def ingest_hae_authenticated(
     db: DbDep,
 ) -> dict:
     """Accept HAE data from an authenticated session (no per-user import token required)."""
-    _verify_app_secret(request)
+    try:
+        _verify_app_secret(request)
+    except HTTPException as exc:
+        await _record_http_failure(user.id, exc)
+        raise
     body = await request.body()
     replay_key = f"{user.id}:{hashlib.sha256(body).hexdigest()}"
-    await _check_replay(replay_key)
+    try:
+        await _check_replay(replay_key)
+    except HTTPException as exc:
+        await _record_http_failure(user.id, exc)
+        raise
 
     import orjson
     try:
         payload = orjson.loads(body)
     except Exception:
+        await hae_metrics_tracker.record_ingest(
+            user_id=user.id,
+            rows_inserted=0,
+            error="Invalid JSON",
+        )
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid JSON")
 
     try:
@@ -107,12 +138,21 @@ async def ingest_health_connect(
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid import token")
     replay_key = f"hc:{import_token}:{hashlib.sha256(body).hexdigest()}"
-    await _check_replay(replay_key)
+    try:
+        await _check_replay(replay_key)
+    except HTTPException as exc:
+        await _record_http_failure(user.id, exc)
+        raise
 
     import orjson
     try:
         payload = orjson.loads(body)
     except Exception:
+        await hae_metrics_tracker.record_ingest(
+            user_id=user.id,
+            rows_inserted=0,
+            error="Invalid JSON",
+        )
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid JSON")
 
     try:
@@ -131,7 +171,6 @@ async def ingest_hae(
     request: Request,
     db: DbDep,
 ) -> dict:
-    _verify_app_secret(request)
     body = await request.body()
 
     from sqlalchemy import select
@@ -142,13 +181,27 @@ async def ingest_hae(
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid import token")
+    try:
+        _verify_app_secret(request)
+    except HTTPException as exc:
+        await _record_http_failure(user.id, exc)
+        raise
     replay_key = f"{import_token}:{hashlib.sha256(body).hexdigest()}"
-    await _check_replay(replay_key)
+    try:
+        await _check_replay(replay_key)
+    except HTTPException as exc:
+        await _record_http_failure(user.id, exc)
+        raise
 
     import orjson
     try:
         payload = orjson.loads(body)
     except Exception:
+        await hae_metrics_tracker.record_ingest(
+            user_id=user.id,
+            rows_inserted=0,
+            error="Invalid JSON",
+        )
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid JSON")
 
     try:

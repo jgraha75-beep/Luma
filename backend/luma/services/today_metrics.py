@@ -32,12 +32,18 @@ async def compute_daily_totals(
 ) -> tuple[dict[str, float], dict[str, float]]:
     """Sum today's logged nutrition plus active-supplement contributions.
 
-    Returns (logged_totals, supplement_nutrients) where logged_totals carries
-    cal/sat/sol/sodium/protein keys.
+    Returns (logged_totals, supplement_nutrients). ``logged_totals`` keeps the
+    short aliases used by streak scoring while also exposing every nutrient key
+    present in meal/supplement data for the configurable nutrition-focus view.
     """
     logged = {"cal": 0.0, "sat": 0.0, "sol": 0.0, "sodium": 0.0, "protein": 0.0}
     for e in today_events:
         nutr = e.nutrition or {}
+        for key, value in nutr.items():
+            try:
+                logged[key] = logged.get(key, 0.0) + float(value or 0.0)
+            except (TypeError, ValueError):
+                continue
         logged["cal"] += float(nutr.get("calories") or 0.0)
         logged["sat"] += float(nutr.get("saturated_fat_g") or 0.0)
         logged["sol"] += float(nutr.get("soluble_fiber_g") or 0.0)
@@ -67,13 +73,26 @@ async def compute_daily_totals(
     supplement_nutrients: dict[str, float] = {}
     for s in active_supps:
         for key, val in (s.nutrients_per_dose or {}).items():
-            supplement_nutrients[key] = supplement_nutrients.get(key, 0.0) + float(val or 0.0)
+            try:
+                numeric = float(val or 0.0)
+            except (TypeError, ValueError):
+                continue
+            supplement_nutrients[key] = supplement_nutrients.get(key, 0.0) + numeric
+            logged[key] = logged.get(key, 0.0) + numeric
 
     logged["cal"] += supplement_nutrients.get("calories", 0.0)
     logged["sat"] += supplement_nutrients.get("saturated_fat_g", 0.0)
     logged["sol"] += supplement_nutrients.get("soluble_fiber_g", 0.0)
     logged["sodium"] += supplement_nutrients.get("sodium_mg", 0.0)
     logged["protein"] += supplement_nutrients.get("protein_g", 0.0)
+
+    # Canonical nutrient names are used by the focus catalog. Keep these
+    # aliases in sync for callers that still use the compact streak keys.
+    logged["calories"] = logged.get("calories", 0.0)
+    logged["saturated_fat_g"] = logged.get("saturated_fat_g", 0.0)
+    logged["soluble_fiber_g"] = logged.get("soluble_fiber_g", 0.0)
+    logged["sodium_mg"] = logged.get("sodium_mg", 0.0)
+    logged["protein_g"] = logged.get("protein_g", 0.0)
 
     return logged, supplement_nutrients
 

@@ -44,9 +44,35 @@ export function HaeImportCard() {
     <div className="glass settings-card" style={{ padding: 24 }}>
       <div className="eyebrow" style={{ marginBottom: 8 }}>Health import</div>
       <p style={{ color: 'var(--fg-tertiary)', fontSize: 14, margin: '0 0 16px' }}>
-        In Health Auto Export, go to Automations &rarr; HTTP and add both values below.
+        In Health Auto Export, go to Automations &rarr; New Automation &rarr; REST API and add both values below.
         The URL identifies you; the header secret authenticates the app.
       </p>
+
+      <div style={{ margin: '0 0 18px', paddingBottom: 16, borderBottom: '1px solid var(--glass-edge)' }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-primary)', marginBottom: 10 }}>
+          Required export settings
+        </div>
+        <dl
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(120px, 0.8fr) minmax(140px, 1fr)',
+            gap: '7px 16px',
+            margin: 0,
+            fontSize: 13,
+          }}
+        >
+          <dt style={{ color: 'var(--fg-tertiary)' }}>Automation type</dt><dd style={{ margin: 0 }}>REST API</dd>
+          <dt style={{ color: 'var(--fg-tertiary)' }}>Data type</dt><dd style={{ margin: 0 }}>Health Metrics</dd>
+          <dt style={{ color: 'var(--fg-tertiary)' }}>Format</dt><dd style={{ margin: 0 }}>JSON</dd>
+          <dt style={{ color: 'var(--fg-tertiary)' }}>Export version</dt><dd style={{ margin: 0 }}>Version 2</dd>
+          <dt style={{ color: 'var(--fg-tertiary)' }}>Date range</dt><dd style={{ margin: 0 }}>Since Last Sync</dd>
+          <dt style={{ color: 'var(--fg-tertiary)' }}>Summarize data</dt><dd style={{ margin: 0 }}>On · daily</dd>
+          <dt style={{ color: 'var(--fg-tertiary)' }}>Large exports</dt><dd style={{ margin: 0 }}>Batch requests on</dd>
+        </dl>
+        <p style={{ color: 'var(--fg-tertiary)', fontSize: 12, margin: '12px 0 0' }}>
+          Keep Tailscale connected on the iPhone. For the first manual test, choose Previous 7 Days and keep the phone unlocked or connected through iPhone Mirroring.
+        </p>
+      </div>
 
       {isLoading ? (
         <p style={{ fontSize: 13, color: 'var(--fg-quiet)', margin: 0 }}>Loading…</p>
@@ -59,6 +85,7 @@ export function HaeImportCard() {
           </div>
           <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
             <input
+              aria-label="Health Auto Export endpoint URL"
               readOnly
               value={webhookUrl}
               style={{
@@ -93,6 +120,7 @@ export function HaeImportCard() {
               </div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
                 <input
+                  aria-label="Health Auto Export app secret"
                   readOnly
                   type="password"
                   value={data.app_secret}

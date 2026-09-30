@@ -11,7 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from luma.agents.prompt_loader import load_prompt
 from luma.config import settings
 from luma.db.models import Food, Goal, Preference
-from luma.services.llm_client import call_llm
+from luma.services.llm_client import LLMConfigurationError, call_llm
+from luma.services.nutrition_focus import METRIC_BY_ID, NUTRITION_FOCUS_KIND, focus_from_preference
 
 logger = logging.getLogger("meal_planner")
 
@@ -70,6 +71,10 @@ async def generate_meal_plan(
     prefs = res_pref.scalars().all()
     dislikes = [p.value for p in prefs if p.kind == "dislike"]
     allergies = [p.value for p in prefs if p.kind == "allergy"]
+    nutrition_focus = focus_from_preference(next((p.value for p in prefs if p.kind == NUTRITION_FOCUS_KIND), None))
+    nutrition_focus_text = ", ".join(
+        METRIC_BY_ID[metric_id].label for metric_id in nutrition_focus.metrics
+    )
 
     # 3. Fetch local foods, then filter against allergens/dislikes before injecting
     stmt_foods = select(Food).limit(300)
@@ -107,6 +112,7 @@ async def generate_meal_plan(
         .replace("{dislikes}", ', '.join(dislikes) if dislikes else 'None')
         .replace("{allergies}", ', '.join(allergies) if allergies else 'None')
         .replace("{constraints}", json.dumps(constraints) if constraints else 'None')
+        .replace("{nutrition_focus}", nutrition_focus_text)
         .replace("{available_foods_text}", available_foods_text)
     )
     
@@ -139,6 +145,15 @@ async def generate_meal_plan(
             
         return json.loads(content)
             
+    except LLMConfigurationError as exc:
+        logger.warning("Meal planner is unavailable: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "AI meal planning is not configured. Add a supported provider key "
+                "or a local AI endpoint in the server environment."
+            ),
+        ) from exc
     except Exception as e:
         logger.exception(f"Error calling local Claude Sonnet meal-planner: {e}")
         raise HTTPException(

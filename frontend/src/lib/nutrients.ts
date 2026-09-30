@@ -40,6 +40,14 @@ export function scaleNutrients(per100g: Record<string, number>, grams: number): 
   return out
 }
 
+/** Scale a provider profile published for one complete serving. */
+export function scaleServingNutrients(perServing: Record<string, number>, servings: number): Nutrients {
+  const out = emptyNutrients()
+  const count = Number.isFinite(servings) ? Math.max(0, servings) : 0
+  for (const k of NUTRIENT_KEYS) out[k] = (perServing[k] ?? 0) * count
+  return out
+}
+
 export function scaleByRatio(n: Nutrients, ratio: number): Nutrients {
   const out = emptyNutrients()
   for (const k of NUTRIENT_KEYS) out[k] = n[k] * ratio
